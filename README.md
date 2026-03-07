@@ -20,7 +20,7 @@
 |----------|----------|------|
 | 旁白 | XiaoxiaoNeural | 温柔女声，语调偏低 |
 | 女主角 | XiaoyiNeural | 活泼女声 |
-| 女配角 | XiaoxiaoNeural | 温柔，语速稍慢 |
+| 女配角 | XiaoxiaoNeural / liaoning-XiaobeiNeural / shaanxi-XiaoniNeural | 温柔、方言幽默、方言明快 |
 | 男主角 | YunxiNeural | 年轻男声，语速稍快 |
 | 男配角 | YunjianNeural / YunxiaNeural / YunyangNeural | 沉稳、清朗、播音腔 |
 
@@ -86,6 +86,8 @@ python app.py
 |--------|------|------|
 | zh-CN-XiaoxiaoNeural | 女 | 温柔，通用 |
 | zh-CN-XiaoyiNeural | 女 | 活泼 |
+| zh-CN-liaoning-XiaobeiNeural | 女 | 辽宁方言，幽默 |
+| zh-CN-shaanxi-XiaoniNeural | 女 | 陕西方言，明快 |
 | zh-CN-YunxiNeural | 男 | 年轻 |
 | zh-CN-YunjianNeural | 男 | 沉稳 |
 | zh-CN-YunxiaNeural | 男 | 清朗 |

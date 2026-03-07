@@ -26,8 +26,10 @@ except ImportError:
 # 声音池（按推荐顺序）
 # ─────────────────────────────────────────────────────
 FEMALE_VOICES = [
-    ("zh-CN-XiaoyiNeural",   "+0%", "+2Hz"),   # 活泼，适合女主
-    ("zh-CN-XiaoxiaoNeural", "-3%", "+0Hz"),   # 温柔，通用
+    ("zh-CN-XiaoyiNeural",           "+0%", "+2Hz"),   # 活泼，适合女主
+    ("zh-CN-XiaoxiaoNeural",         "-3%", "+0Hz"),   # 温柔，通用
+    ("zh-CN-liaoning-XiaobeiNeural", "+0%", "+0Hz"),   # 辽宁方言，幽默
+    ("zh-CN-shaanxi-XiaoniNeural",   "+0%", "+0Hz"),   # 陕西方言，明快
 ]
 MALE_VOICES = [
     ("zh-CN-YunxiNeural",   "+8%", "+3Hz"),   # 年轻，适合男主
