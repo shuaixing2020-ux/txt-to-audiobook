@@ -1,0 +1,20 @@
+# 虚拟环境
+.venv/
+
+# 小说原文（版权内容，不入库）
+data/*.txt
+
+# 生成的音频
+output/*.mp3
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 临时文件
+*.tmp
+scripts/script_preview.json
