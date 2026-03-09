@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import html as _html
 import json
 import os
 import sys
@@ -125,6 +126,36 @@ body, .gradio-container, .main {
 
 /* 按钮 */
 button.lg { letter-spacing: 0.08em !important; }
+
+/* 同步文本面板 */
+#sync-lines {
+    height: 420px;
+    overflow-y: auto;
+    padding: 0.8rem 1rem;
+    background: #faf7f2;
+    border: 1px solid #d4bc96;
+    border-radius: 8px;
+    font-family: 'Noto Serif SC', Georgia, serif;
+    font-size: 0.88em;
+    line-height: 2;
+}
+.sync-line {
+    padding: 0.3rem 0.7rem;
+    margin: 0.1rem 0;
+    border-left: 3px solid transparent;
+    border-radius: 4px;
+    transition: background 0.25s, border-color 0.25s;
+}
+.sync-line.active {
+    background: #e8d5b0;
+    border-left-color: #c4a882;
+}
+.sync-role {
+    font-size: 0.75em;
+    font-weight: 600;
+    margin-right: 0.5em;
+    opacity: 0.7;
+}
 """
 
 # ─────────────────────────────────────────────────────
@@ -134,6 +165,72 @@ _GENDER_DISPLAY = {"female": "女", "male": "男", "unknown": "未知"}
 _ROLE_DISPLAY   = {"narrator": "旁白", "protagonist": "主角", "supporting": "配角"}
 _GENDER_REVERSE = {"女": "female", "男": "male", "未知": "unknown"}
 _ROLE_REVERSE   = {"旁白": "narrator", "主角": "protagonist", "配角": "supporting"}
+
+
+_SYNC_JS = """
+() => {
+    function attachSync() {
+        var audio = document.querySelector('audio');
+        if (!audio || !audio.src || audio.src === window.location.href) {
+            setTimeout(attachSync, 300);
+            return;
+        }
+        if (window._audioSyncListener) {
+            audio.removeEventListener('timeupdate', window._audioSyncListener);
+        }
+        window._lastActiveSyncLine = null;
+        window._audioSyncListener = function() {
+            var ms = audio.currentTime * 1000;
+            var container = document.getElementById('sync-lines');
+            if (!container) return;
+            var lines = container.querySelectorAll('.sync-line');
+            var found = null;
+            for (var i = 0; i < lines.length; i++) {
+                var s = parseFloat(lines[i].dataset.start);
+                var e = parseFloat(lines[i].dataset.end);
+                if (ms >= s && ms < e) { found = lines[i]; break; }
+            }
+            if (found !== window._lastActiveSyncLine) {
+                if (window._lastActiveSyncLine) {
+                    window._lastActiveSyncLine.classList.remove('active');
+                }
+                if (found) {
+                    found.classList.add('active');
+                    found.scrollIntoView({behavior: 'smooth', block: 'center'});
+                }
+                window._lastActiveSyncLine = found;
+            }
+        };
+        audio.addEventListener('timeupdate', window._audioSyncListener);
+    }
+    setTimeout(attachSync, 800);
+}
+"""
+
+_SYNC_PLACEHOLDER = (
+    '<div style="color:#b09880; font-size:0.88em; text-align:center; '
+    'padding:3rem 1rem; font-style:italic;">合成完成后，此处将随音频播放同步显示对应文本</div>'
+)
+
+
+def _build_sync_html(timings: list) -> str:
+    """将时间轴数据渲染为带 data-start/end 属性的 HTML，供 JS 同步高亮"""
+    if not timings:
+        return _SYNC_PLACEHOLDER
+    role_colors = {"旁白": "#9e8b7a"}
+    lines_html = ""
+    for t in timings:
+        role  = t["role"]
+        text  = _html.escape(t["text"])
+        start = int(t["start"])
+        end   = int(t["end"])
+        color = role_colors.get(role, "#3a2010")
+        lines_html += (
+            f'<div class="sync-line" data-start="{start}" data-end="{end}">'
+            f'<span class="sync-role" style="color:{color};">[{_html.escape(role)}]</span>'
+            f'{text}</div>'
+        )
+    return f'<div id="sync-lines">{lines_html}</div>'
 
 
 def analyze_novel(file):
@@ -192,9 +289,9 @@ async def generate_audiobook(
 ):
     """主合成函数，供 Gradio 调用"""
     if file is None:
-        return None, None, "⚠️ 请先上传小说文件"
+        return None, None, "⚠️ 请先上传小说文件", _SYNC_PLACEHOLDER
     if char_df is None or len(char_df) == 0:
-        return None, None, "⚠️ 请先点击「分析角色与声音」"
+        return None, None, "⚠️ 请先点击「分析角色与声音」", _SYNC_PLACEHOLDER
 
     section_name = (section_name or "片段").strip()
     output_dir   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -209,7 +306,7 @@ async def generate_audiobook(
             # v 在 0~1 之间，映射到 5%~90%
             progress(0.05 + 0.85 * v, desc=desc)
 
-        output_file, duration = await _generate_audio(
+        output_file, duration, timings = await _generate_audio(
             novel_path=file.name,
             start=int(start_line),
             end=int(end_line),
@@ -228,10 +325,10 @@ async def generate_audiobook(
             f"✅ 合成完成！"
             f"  时长：{mins} 分 {secs} 秒  ·  大小：{size_kb:.0f} KB"
         )
-        return output_file, output_file, status
+        return output_file, output_file, status, _build_sync_html(timings)
 
     except Exception as e:
-        return None, None, f"❌ 合成失败：{e}"
+        return None, None, f"❌ 合成失败：{e}", _SYNC_PLACEHOLDER
 
 
 # ─────────────────────────────────────────────────────
@@ -305,6 +402,10 @@ with gr.Blocks(title="有声书工坊", theme=_theme, css=CUSTOM_CSS) as demo:
         audio_out = gr.Audio(label="试听", type="filepath", scale=3)
         file_out  = gr.File(label="下载 MP3", scale=1)
 
+    # ── 第四步：同步字幕 ──────────────────────────────
+    gr.HTML('<div class="section-label">五 &nbsp;·&nbsp; 同步文本（随音频播放自动高亮）</div>')
+    sync_display = gr.HTML(value=_SYNC_PLACEHOLDER)
+
     # ── 页脚 ──────────────────────────────────────────
     gr.HTML("""
     <div class="app-footer">
@@ -322,8 +423,8 @@ with gr.Blocks(title="有声书工坊", theme=_theme, css=CUSTOM_CSS) as demo:
     generate_btn.click(
         fn=generate_audiobook,
         inputs=[file_input, char_table, start_line, end_line, section_name],
-        outputs=[audio_out, file_out, gen_status],
-    )
+        outputs=[audio_out, file_out, gen_status, sync_display],
+    ).then(fn=None, js=_SYNC_JS)
 
 
 if __name__ == "__main__":

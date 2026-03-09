@@ -89,9 +89,13 @@ async def synthesize_script(
     voice_map: dict,
     tmpdir: str,
     progress_cb: Callable | None = None,
-) -> list[str]:
-    """合成所有台词，返回 mp3 文件路径列表（含停顿片段）"""
+) -> tuple[list[str], list[dict]]:
+    """合成所有台词，返回 (mp3文件路径列表, 时间轴列表)
+    时间轴格式：[{start: ms, end: ms, role: str, text: str}, ...]
+    """
     paths: list[str] = []
+    timings: list[dict] = []
+    cumulative_ms: float = 0.0
     total = len(script)
 
     # 旁白兜底配置
@@ -110,14 +114,28 @@ async def synthesize_script(
         if not chunks:
             continue  # 纯标点或空行，跳过
 
+        line_start_ms = cumulative_ms
+        line_duration_ms = 0.0
+
         for ci, chunk in enumerate(chunks):
             out = os.path.join(tmpdir, f"{i:05d}_{ci}_{role}.mp3")
             try:
                 await _synthesize_line(chunk, cfg["voice"], cfg["rate"], cfg["pitch"], out)
+                seg = AudioSegment.from_mp3(out)
+                line_duration_ms += len(seg)
                 paths.append(out)
             except Exception:
                 pass  # 单句失败不中断整体
             await asyncio.sleep(0.5)  # 避免触发 Microsoft TTS 限流
+
+        if line_duration_ms > 0:
+            timings.append({
+                "start": line_start_ms,
+                "end":   line_start_ms + line_duration_ms,
+                "role":  role,
+                "text":  text,
+            })
+            cumulative_ms += line_duration_ms
 
         if progress_cb:
             progress_cb(i / total, f"合成第 {i+1}/{total} 句 [{role}]")
@@ -136,8 +154,9 @@ async def synthesize_script(
             pause_path = os.path.join(tmpdir, f"{i:05d}_pause.mp3")
             pause.export(pause_path, format="mp3")
             paths.append(pause_path)
+            cumulative_ms += ms
 
-    return paths
+    return paths, timings
 
 
 # ─────────────────────────────────────────────────────
@@ -163,10 +182,10 @@ async def generate(
     voice_map: dict,
     output_dir: str = "output",
     progress_cb: Callable | None = None,
-) -> tuple[str, float]:
+) -> tuple[str, float, list[dict]]:
     """
     合成有声书片段。
-    返回 (output_file_path, duration_seconds)
+    返回 (output_file_path, duration_seconds, timings)
     """
     with open(novel_path, encoding="utf-8") as f:
         all_lines = f.readlines()
@@ -179,7 +198,7 @@ async def generate(
 
     tmpdir = tempfile.mkdtemp()
     try:
-        paths = await synthesize_script(script, voice_map, tmpdir, progress_cb)
+        paths, timings = await synthesize_script(script, voice_map, tmpdir, progress_cb)
 
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{name}.mp3")
@@ -188,7 +207,7 @@ async def generate(
             progress_cb(0.95, "拼接音频中...")
 
         duration = merge_audio(paths, output_file)
-        return output_file, duration
+        return output_file, duration, timings
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -223,7 +242,7 @@ async def main():
     def cli_progress(v, desc):
         print(f"  {desc}")
 
-    output_file, duration = await generate(
+    output_file, duration, _ = await generate(
         novel_path=args.input,
         start=args.start,
         end=args.end,
