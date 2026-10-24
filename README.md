@@ -1,5 +1,7 @@
 # 有声书工坊 · txt-to-audiobook
 
+[![tests](https://github.com/shuaixing2020-ux/txt-to-audiobook/actions/workflows/tests.yml/badge.svg)](https://github.com/shuaixing2020-ux/txt-to-audiobook/actions/workflows/tests.yml)
+
 > 把一个中文小说 txt 变成**多角色有声书**：自动切章 → 识别人物 → 转译成脚本 → 校对 → 配音合成。
 > 全程网页操作，可暂停 / 停止 / 续跑；在线（Edge TTS）与离线（macOS say）双引擎。
 

@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # pydub 导出 mp3 依赖 ffmpeg
+      - name: 安装 ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # 测试只依赖这几个；gradio 体积大，CI 里不装
+      - name: 安装依赖
+        run: pip install edge-tts pydub jieba certifi
+
+      - name: 解析 / 假角色 / 性别 / 音色
+        run: python -m scripts.test_parse
+
+      - name: 切章 / 表格 / 角色库 / 转译 / 任务控制 / 多书
+        run: python -m scripts.test_studio
+
+      - name: 清洗 / 全链路 / say 引擎（非 macOS 自动跳过）
+        run: python -m scripts.test_pipeline
+
+      - name: 大模型识别（本地假服务器，不联网）
+        run: python -m scripts.test_llm
