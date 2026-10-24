@@ -104,6 +104,40 @@ function toast(msg, undo) {
   setTimeout(() => t.remove(), undo ? 6000 : 2600);
 }
 
+/* ── PWA / 快捷键 / 通知 ────────────────────────────── */
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+function bindShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
+    if (e.key === 'Escape') { closeSheet(); return; }
+    if (typing) return;
+    if (e.code === 'Space' && P.name) {          // 空格：播放 / 暂停
+      e.preventDefault();
+      P.audio.paused ? P.audio.play() : P.audio.pause();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && P.name) { P.audio.currentTime = Math.max(0, P.audio.currentTime - 15); }
+    if (e.key === 'ArrowRight' && P.name) {
+      P.audio.currentTime = Math.min(P.audio.duration || 0, P.audio.currentTime + 15);
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {   // ⌘/Ctrl+Enter：开始合成
+      e.preventDefault();
+      if (S.tab !== 'synth') setTab('synth');
+      $('btnStart').click();
+    }
+  });
+}
+
+function notifyDone(text) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try { new Notification('有声书工坊', { body: text, icon: '/icon-192.png' }); } catch (e) {}
+}
+
 /* ── 启动 ───────────────────────────────────────────── */
 async function boot() {
   buildNav();
@@ -817,7 +851,16 @@ function renderQueue() {
     return;
   }
   const job = S.job;
-  box.innerHTML = list.map((c, i) => {
+  const chars = list.reduce((a, c) => a + (c.chars || 0), 0);
+  const audioMin = Math.round(chars / 325);                     // 实测：约 325 字/分钟
+  const speed = (S.settings?.engine === 'say') ? 6 : 2.5;        // 离线 4 并发约 6× 实时
+  const etaMin = Math.max(1, Math.round(audioMin / speed));
+  box.innerHTML = `<div class="row" style="background:rgba(0,122,255,.04)">
+      <div class="grow">
+        <div class="title">已选 ${list.length} 章</div>
+        <div class="meta">约 ${chars.toLocaleString()} 字 · 音频约 ${audioMin} 分钟 · 预计合成 ${etaMin} 分钟（${S.settings?.engine === 'say' ? '离线' : '在线'}）</div>
+      </div>
+    </div>` + list.map((c, i) => {
     let status = '等待';
     if (job) {
       if ((job.failures || []).includes(c.title)) status = '失败';
@@ -834,6 +877,9 @@ $('btnStart').onclick = async () => {
   if (!S.selected.size) return toast('先在书架里勾选章节');
   if (!S.cast.length) { setTab('cast'); return toast('先识别人物'); }
   try {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
     await api('/api/job/batch', { method: 'POST',
       body: { chapters: [...S.selected], force: false, use_translated: true } });
     startPolling();
@@ -923,7 +969,12 @@ function renderJob() {
       loadWorks(); loadChapterOptions();
       if (job.kind === 'export' && job.out_path) {
         toast(`已导出 ${job.out_path.split('/').pop()}`);
+        notifyDone(`导出完成：${job.out_path.split('/').pop()}`);
         setTab('works');
+      } else if (job.kind === 'batch') {
+        notifyDone(`合成完成：成功 ${job.ok} / 跳过 ${job.skip} / 失败 ${job.fail}`);
+      } else if (job.kind === 'translate') {
+        notifyDone(`转译完成：${job.ok} 章`);
       }
     }
   }
@@ -1302,8 +1353,44 @@ function openSettings() {
 }
 $('btnSettings').onclick = openSettings;
 
+/* ── PWA / 快捷键 / 通知 ────────────────────────────── */
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+function bindShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
+    if (e.key === 'Escape') { closeSheet(); return; }
+    if (typing) return;
+    if (e.code === 'Space' && P.name) {          // 空格：播放 / 暂停
+      e.preventDefault();
+      P.audio.paused ? P.audio.play() : P.audio.pause();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && P.name) { P.audio.currentTime = Math.max(0, P.audio.currentTime - 15); }
+    if (e.key === 'ArrowRight' && P.name) {
+      P.audio.currentTime = Math.min(P.audio.duration || 0, P.audio.currentTime + 15);
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {   // ⌘/Ctrl+Enter：开始合成
+      e.preventDefault();
+      if (S.tab !== 'synth') setTab('synth');
+      $('btnStart').click();
+    }
+  });
+}
+
+function notifyDone(text) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try { new Notification('有声书工坊', { body: text, icon: '/icon-192.png' }); } catch (e) {}
+}
+
 /* ── 启动 ───────────────────────────────────────────── */
 playerInit();
+registerSW();
+bindShortcuts();
 
 boot().catch((e) => {
   document.body.innerHTML = `<div style="padding:40px;font-family:-apple-system">
