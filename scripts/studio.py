@@ -1148,11 +1148,15 @@ class SynthesisJob:
                 self._set(status="stopped", finished_at=time.time())
                 return
             except Exception as e:                 # noqa: BLE001
+                kind = getattr(e, "kind", "unknown")
+                hint = getattr(e, "hint", "")
                 with self._lock:
                     self.fail += 1
-                    self.failures.append(name)
+                    self.failures.append({"name": name, "kind": kind, "hint": hint,
+                                          "message": str(e).replace(chr(10), " ")[:160]})
                     self.progress = i / self.total
-                self._log(f"[{i}/{self.total}] ❌ {name}：{str(e).replace(chr(10), ' ')[:160]}")
+                self._log(f"[{i}/{self.total}] ❌ {name}（{kind}）："
+                          f"{str(e).replace(chr(10), ' ')[:160]}")
 
         status = "stopped" if self._stop.is_set() else "done"
         self._set(status=status, finished_at=time.time())
@@ -1584,17 +1588,13 @@ def preview_voice(text: str, voice: str, rate: str = "+0%", pitch: str = "+0Hz")
     text = as_str(text) or "这是一段试音。"
     tmpdir = tempfile.mkdtemp(prefix="preview_")
     out = os.path.join(tmpdir, "preview.mp3")
-    ok = asyncio.run(gen._synthesize_line(
-        gen.apply_pronounce(text), resolve_voice(voice), as_str(rate, "+0%") or "+0%",
-        as_str(pitch, "+0Hz") or "+0Hz", out,
-    ))
-    if not ok:
-        engine = gen._ENGINE
-        raise RuntimeError(
-            "样音合成失败。"
-            + ("离线 say 引擎：检查系统是否装了中文声音。" if engine == "say"
-               else "在线 edge 引擎：多半被限流或 DNS 不通，可切到离线引擎。")
-        )
+    try:
+        asyncio.run(gen._synthesize_line(
+            gen.apply_pronounce(text), resolve_voice(voice), as_str(rate, "+0%") or "+0%",
+            as_str(pitch, "+0Hz") or "+0Hz", out,
+        ))
+    except gen.SynthesisError as e:
+        raise RuntimeError(f"{e.hint}") from e
     return out
 
 

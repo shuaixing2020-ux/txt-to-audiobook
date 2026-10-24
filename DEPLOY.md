@@ -597,3 +597,24 @@ README 同步修正 8 处：离线命令、五 Tab 措辞、大模型设置入�
 | 刷新恢复 | Tab 写进 URL hash + localStorage；滚动位置按 Tab 记录（节流 400ms），数据渲染完再恢复；校对页记住每本书上次看的章节 | 实测：切到「作品」滚到 600 → 刷新 → 仍在作品页、滚动 600 |
 | 局域网警示 | `HOST=0.0.0.0` 时 `bootstrap.lan=true`，页面顶部常驻橙色横幅「同网段的人都能打开并下载你的书」 | `HOST=0.0.0.0` 起 7861 实例，`lan=true`、横幅可见、文案正确 |
 | 撤销覆盖 | ①「设为不朗读」按原始行号插回（`restore_lines`）②批量审查跳过可撤销 ③改说话人可撤销 ④删除角色可撤销 | 跳过 3 行再撤销，文件 sha1 与原始**完全一致** |
+
+## 27. v4.0 变更清单（错误分类）
+
+| 类别 | 判定依据 | 给用户的建议 |
+| --- | --- | --- |
+| `network` | getaddrinfo / DNS / connect / SSL / certificate | 检查网络或代理，或切离线引擎 |
+| `timeout` | asyncio.TimeoutError / "timed out" | 调大句间间隔，或切离线 |
+| `ratelimit` | 429 / too many / rate limit / throttle | 间隔调到 2~3 秒、并发降到 2，等 5~10 分钟 |
+| `empty` | No audio / 空音频 | 先重试，持续失败多半是这一句有异常字符 |
+| `auth` | 401 / 403 / unauthorized | 检查账号状态 |
+| `engine` | say / tts_local / 语音 | 检查系统中文语音是否安装 |
+| `unknown` | 其他 | 先重试，仍失败可跳过 |
+
+实现：`_synthesize_line` 失败时抛 `SynthesisError(kind, hint)`（不再静默返回 False）；
+`synthesize_script` 收集分类样本 → `stats.top_error`；`generate` 的「全部失败」异常带 `.kind/.hint`；
+`SynthesisJob.failures` 从字符串数组改为 `{name, kind, hint, message}`。
+
+界面：合成页失败卡片显示「失败 N 章 · 网络不通」+ 具体建议，网络/超时/限流三类且当前是在线引擎时，
+多一个「切离线引擎并重试」按钮（一键切引擎 + 重排队）。
+
+测试 22→23 例（七种异常各判一次）。

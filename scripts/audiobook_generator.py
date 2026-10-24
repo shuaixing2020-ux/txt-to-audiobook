@@ -102,8 +102,56 @@ def _cache_key(text: str, voice: str, rate: str, pitch: str) -> str:
 # ─────────────────────────────────────────────────────
 # TTS 合成（带缓存 + 退避）
 # ─────────────────────────────────────────────────────
+class SynthesisError(RuntimeError):
+    """单句合成失败，带分类与可操作建议"""
+
+    def __init__(self, kind: str, hint: str, raw: str = ""):
+        self.kind = kind
+        self.hint = hint
+        self.raw = raw
+        super().__init__(f"{kind}: {raw or hint}")
+
+
+_HINTS = {
+    "network": "网络到 TTS 服务不通（DNS 或连接被拦）。检查网络 / 代理，或切到离线引擎。",
+    "timeout": "请求超时。稍后重试；经常超时就把句间间隔调大，或切离线引擎。",
+    "ratelimit": "被限流了。把句间间隔调到 2~3 秒、并发降到 2，等 5~10 分钟再试。",
+    "empty": "服务返回了空音频。先重试；持续失败多半是这一句里有异常字符。",
+    "engine": "本地语音引擎不可用。检查系统是否装了中文语音，或切回在线引擎。",
+    "auth": "鉴权或服务端拒绝。检查账号状态，或稍后再试。",
+    "unknown": "合成失败，原因不明。先重试一次，仍失败可跳过这一句。",
+}
+
+
+def classify_tts_error(exc: Exception) -> tuple[str, str]:
+    """把异常归到可操作的类别里，返回 (kind, 建议)"""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+
+    if isinstance(exc, asyncio.TimeoutError) or "timeout" in msg or "timed out" in msg:
+        kind = "timeout"
+    elif "429" in msg or "too many" in msg or "rate limit" in msg or "throttl" in msg:
+        kind = "ratelimit"
+    elif any(k in msg for k in ("dns", "getaddrinfo", "name or service", "nodename",
+                                "connect", "ssl", "certificate", "unreachable")):
+        kind = "network"
+    elif "no audio" in msg or "empty" in msg or "noaudio" in name:
+        kind = "empty"
+    elif "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg:
+        kind = "auth"
+    elif "say" in msg or "tts_local" in msg or "语音" in msg:
+        kind = "engine"
+    else:
+        kind = "unknown"
+    return kind, _HINTS[kind]
+
+
 async def _synthesize_line(text: str, voice: str, rate: str, pitch: str, out_path: str) -> bool:
-    """合成单句。命中缓存直接复制；失败重试 5 次（4/8/16/32s 退避）。返回是否成功"""
+    """合成单句。命中缓存直接复制；失败重试 5 次（4/8/16/32s 退避）
+
+    失败时抛 SynthesisError（带分类与建议），而不是静默返回 False ——
+    上层要能告诉用户「是被限流还是网络不通」。
+    """
     os.makedirs(CACHE_DIR, exist_ok=True)
     cached = os.path.join(CACHE_DIR, _cache_key(text, voice, rate, pitch) + ".mp3")
     if os.path.exists(cached) and os.path.getsize(cached) > 0:
@@ -114,13 +162,15 @@ async def _synthesize_line(text: str, voice: str, rate: str, pitch: str, out_pat
         from scripts.tts_local import say_to_mp3
         try:
             await asyncio.to_thread(say_to_mp3, text, voice, rate, pitch, out_path)
-        except Exception:
-            return False
+        except Exception as e:                     # noqa: BLE001
+            kind, hint = classify_tts_error(e)
+            raise SynthesisError(kind, hint, str(e)[:120]) from e
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             shutil.copyfile(out_path, cached)
             return True
-        return False
+        raise SynthesisError("empty", _HINTS["empty"], "离线引擎产出空文件")
 
+    last: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
             communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
@@ -128,11 +178,13 @@ async def _synthesize_line(text: str, voice: str, rate: str, pitch: str, out_pat
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 shutil.copyfile(out_path, cached)   # 成功即入缓存
                 return True
-        except Exception:
-            if attempt == _MAX_ATTEMPTS - 1:
-                return False
+            last = RuntimeError("服务返回空音频")
+        except Exception as e:                     # noqa: BLE001
+            last = e
+        if attempt < _MAX_ATTEMPTS - 1:
             await asyncio.sleep(4 * (2 ** attempt))   # 4, 8, 16, 32 秒
-    return False
+    kind, hint = classify_tts_error(last or RuntimeError("unknown"))
+    raise SynthesisError(kind, hint, str(last)[:120] if last else "")
 
 
 # ─────────────────────────────────────────────────────
@@ -269,12 +321,20 @@ async def synthesize_script(
     sem = asyncio.Semaphore(max(1, _WORKERS))
     counter = {"done": 0}
 
+    errors: list[dict] = []                  # 失败句的分类样本
+    stats["errors"] = errors
+
     async def worker(idx: int, t: dict) -> None:
         async with sem:
             if control is not None:
                 await control()          # 暂停时在此等待；停止/跳过时抛异常
             out = os.path.join(tmpdir, f"{t['line']:05d}_{t['chunk']}_{t['role']}.mp3")
-            ok = await _synthesize_line(t["text"], t["voice"], t["rate"], t["pitch"], out)
+            try:
+                ok = await _synthesize_line(t["text"], t["voice"], t["rate"], t["pitch"], out)
+            except SynthesisError as e:
+                ok = False
+                errors.append({"kind": e.kind, "hint": e.hint,
+                               "text": t["text"][:30], "raw": e.raw})
             results[idx] = out if ok else None
             counter["done"] += 1
             if progress_cb:
@@ -403,15 +463,20 @@ async def generate(
     try:
         paths, timings, stats = await synthesize_script(script, voice_map, tmpdir,
                                                         progress_cb, control)
+        if stats.get("errors"):
+            from collections import Counter
+            top_kind = Counter(e["kind"] for e in stats["errors"]).most_common(1)[0][0]
+            stats["top_error"] = {"kind": top_kind, "hint": _HINTS.get(top_kind, "")}
         if stats["total"] == 0:
             raise RuntimeError("没有可合成的文本（检查起止行号是否落在正文上）")
         if stats["ok"] == 0:
-            hint = ("当前用的是 edge-tts（在线）：多半被限流、DNS 解析不到或断网。\n"
-                    "  · 稍后重跑即可（已成功句子有缓存，不会重复消耗接口）\n"
-                    "  · 想立刻离线出片：加 --engine say（macOS 系统语音，音质差些）")
-            if _ENGINE == "say":
-                hint = "当前用的是离线 say 引擎：检查系统是否装有中文声音（系统设置→辅助功能→朗读内容）。"
-            raise RuntimeError(f"全部 {stats['total']} 句合成失败。\n  {hint}")
+            top = stats.get("top_error") or {}
+            hint = top.get("hint") or "稍后重跑即可（已成功的句子有缓存，不会重复消耗接口）"
+            err = RuntimeError(
+                f"全部 {stats['total']} 句合成失败（{top.get('kind', 'unknown')}）。\n  {hint}")
+            err.kind = top.get("kind", "unknown")     # 让上层能分类展示
+            err.hint = hint
+            raise err
 
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{name}.mp3")
@@ -431,7 +496,8 @@ async def generate(
                     t["end"] *= k
 
         if progress_cb and stats["failed"]:
-            progress_cb(0.98, f"注意：{stats['failed']}/{stats['total']} 句失败，已跳过")
+            kind = (stats.get("top_error") or {}).get("kind", "")
+            progress_cb(0.98, f"注意：{stats['failed']}/{stats['total']} 句失败（{kind}），已跳过")
         return output_file, duration, timings
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

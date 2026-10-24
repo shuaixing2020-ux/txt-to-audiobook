@@ -196,6 +196,26 @@ def test_script_preview_flags():
         _restore(original)
 
 
+def test_error_classification():
+    """合成失败要能分类：网络 / 限流 / 超时 / 空音频 / 鉴权 / 引擎"""
+    import asyncio
+    from scripts.audiobook_generator import classify_tts_error
+
+    cases = [
+        (asyncio.TimeoutError(), "timeout"),
+        (Exception("429 Too Many Requests"), "ratelimit"),
+        (Exception("getaddrinfo failed"), "network"),
+        (Exception("No audio was received"), "empty"),
+        (Exception("401 Unauthorized"), "auth"),
+        (Exception("say 合成不出有效音频"), "engine"),
+        (Exception("???"), "unknown"),
+    ]
+    for exc, expect in cases:
+        kind, hint = classify_tts_error(exc)
+        assert kind == expect, (exc, kind, expect)
+        assert hint, "每个分类都要给建议"
+
+
 def test_output_fingerprint_detects_stale():
     """成品指纹：脚本或音色变了要判为过期，否则会拿旧成品当最新"""
     original = _isolate()
@@ -553,6 +573,7 @@ if __name__ == "__main__":
         test_audit_rules_and_batch_skip,
         test_multi_book_isolation,
         test_output_fingerprint_detects_stale,
+        test_error_classification,
         test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,

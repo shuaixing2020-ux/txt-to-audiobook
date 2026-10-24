@@ -926,7 +926,7 @@ function renderQueue() {
     </div>` + list.map((c, i) => {
     let status = '等待';
     if (job) {
-      if ((job.failures || []).includes(c.title)) status = '失败';
+      if ((job.failures || []).some((f) => (f.name || f) === c.title)) status = '失败';
       else if (i + 1 < job.index) status = '已完成';
       else if (i + 1 === job.index) status = job.status === 'running' ? '进行中' : job.status;
     }
@@ -1049,22 +1049,41 @@ function renderJob() {
   updateMini();
 }
 
+const KIND_LABEL = {
+  network: '网络不通', timeout: '请求超时', ratelimit: '被限流',
+  empty: '空音频', engine: '引擎不可用', auth: '鉴权失败', unknown: '未知原因',
+};
+
 function renderFailures() {
   const job = S.job;
-  const fails = (job && job.failures) || [];
+  const raw = (job && job.failures) || [];
+  const fails = raw.map((f) => (typeof f === 'string'
+    ? { name: f, kind: 'unknown', hint: '' } : f));
   const box = $('failBox');
   if (!fails.length) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="section-title">失败 ${fails.length} 章</div>
-    <div class="card">${fails.map((n) => `<div class="row">
-      <div class="grow"><div class="title">${esc(n)}</div>
-      <div class="meta">网络超时或文本异常，可直接重试</div></div>
+
+  const kind = fails[0].kind || 'unknown';
+  const hint = fails[0].hint || '';
+  const canGoOffline = ['network', 'timeout', 'ratelimit'].includes(kind)
+    && S.settings?.engine === 'edge';
+
+  box.innerHTML = `<div class="section-title">失败 ${fails.length} 章 · ${esc(KIND_LABEL[kind] || kind)}</div>
+    <div class="card">
+      ${hint ? `<div class="hint">${esc(hint)}</div>` : ''}
+      ${fails.map((f) => `<div class="row">
+        <div class="grow"><div class="title">${esc(f.name)}</div>
+        <div class="meta">${esc(KIND_LABEL[f.kind] || f.kind || '')}</div></div>
       </div>`).join('')}
-      <div class="row"><button class="btn block" id="btnRetry">重试这 ${fails.length} 章</button></div>
+      <div class="row" style="gap:8px">
+        <button class="btn" id="btnRetry">重试这 ${fails.length} 章</button>
+        ${canGoOffline ? '<button class="btn primary" id="btnOffline">切离线引擎并重试</button>' : ''}
+      </div>
     </div>`;
-  $('btnRetry').onclick = async () => {
-    const files = fails
-      .map((n) => (S.chapters.find((c) => c.title === n) || {}).file)
-      .filter(Boolean);
+
+  const files = fails
+    .map((f) => (S.chapters.find((c) => c.title === f.name) || {}).file)
+    .filter(Boolean);
+  const retry = async () => {
     if (!files.length) return toast('找不到对应章节，可能在书架里被替换了');
     try {
       await api('/api/job/batch', { method: 'POST',
@@ -1072,6 +1091,17 @@ function renderFailures() {
       toast('已重新排队');
     } catch (e) { toast(e.message); }
   };
+  $('btnRetry').onclick = retry;
+  if (canGoOffline) {
+    $('btnOffline').onclick = async () => {
+      try {
+        const r = await api('/api/settings', { method: 'POST', body: { engine: 'say' } });
+        applySettings({ ...S.settings, engine: r.engine }, S.llm);
+        toast('已切到离线引擎，重新排队');
+        await retry();
+      } catch (e) { toast(e.message); }
+    };
+  }
 }
 
 function updateMini() {
