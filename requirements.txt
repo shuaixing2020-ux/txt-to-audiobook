@@ -1,5 +1,15 @@
+# 语音合成（在线）
 edge-tts>=6.1.9
+
+# 音频处理（需要系统安装 ffmpeg）
 pydub>=0.25.1
+
+# 中文分词（本地人物识别）
 jieba>=0.42.1
-gradio>=4.0.0
+
+# 网页界面
+gradio>=5.0.0
 pandas>=2.0.0
+
+# HTTPS 证书（python.org 版 Python 在 macOS 上不读系统钥匙串）
+certifi>=2023.0.0

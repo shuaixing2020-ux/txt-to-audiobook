@@ -1,11 +1,23 @@
 # 虚拟环境
 .venv/
+venv/
 
-# 小说原文（版权内容，不入库）
+# 小说原文 / 切好的章节 / 转译稿（版权内容，一律不入库）
 data/*.txt
+samples/
+translated/
 
-# 生成的音频
-output/*.mp3
+# 生成的音频与产物
+output/
+*.mp3
+*.wav
+*.m4a
+
+# 本机配置（含 API Key，绝对不要提交）
+config/
+
+# TTS 逐句缓存（可删，删了会重新合成）
+.cache/
 
 # macOS
 .DS_Store
@@ -14,6 +26,7 @@ output/*.mp3
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # 临时文件
 *.tmp
