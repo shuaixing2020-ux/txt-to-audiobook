@@ -243,6 +243,27 @@ def _chapter_path(chapter: str) -> str:
     return p
 
 
+@app.get("/api/audit")
+def audit(chapter: str):
+    try:
+        return studio.audit_chapter(chapter)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+class SkipReq(BaseModel):
+    chapter: str
+    indexes: list[int]
+
+
+@app.post("/api/script/skip")
+def skip_lines(req: SkipReq):
+    try:
+        return studio.skip_lines(req.chapter, req.indexes)
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 class TranslateReq(BaseModel):
     chapters: list[str]
     mode: str = "llm"

@@ -527,6 +527,80 @@ def script_preview(novel_path: str, voice_map: dict, start: int = 0,
     return {"rows": rows, "stats": stats, "roles": roles, "total": len(trace)}
 
 
+# ─────────────────────────────────────────────────────
+# 内容审查：水印 / 广告 / 乱码 / 重复
+# ─────────────────────────────────────────────────────
+_AUDIT_RULES = [
+    ("水印", ["起点中文网", "笔趣阁", "最新章节", "请收藏", "求收藏", "求月票", "求订阅",
+              "手机用户", "www.", "http", "本章未完", "百度搜索", "一秒记住", "记住本站"]),
+    ("广告", ["QQ群", "qq群", "微信公众号", "加微信", "扫码", "书友群", "读者群"]),
+]
+_GARBLE_CHARS = set("□�?？×※★☆◆■●○")
+
+
+def audit_chapter(chapter: str) -> dict:
+    """扫一遍转译稿，挑出可疑行（只提示，不自动改）"""
+    path = translate.translated_path(chapter)
+    source = "translated"
+    if not os.path.exists(path):
+        path = os.path.join(SAMPLES_DIR, chapter)
+        source = "raw"
+    if not os.path.exists(path):
+        raise FileNotFoundError("章节不存在")
+
+    lines = [ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()]
+    findings = []
+    prev = None
+    repeat = 0
+
+    for idx, line in enumerate(lines, 1):
+        body = line.split(translate.DELIM, 1)[-1] if translate.DELIM in line else line
+        role = line.split(translate.DELIM, 1)[0] if translate.DELIM in line else "—"
+
+        for kind, words in _AUDIT_RULES:
+            hit = next((w for w in words if w.lower() in body.lower()), None)
+            if hit:
+                findings.append({"index": idx, "role": role, "kind": kind,
+                                 "reason": f"含「{hit}」", "text": body[:60]})
+                break
+        else:
+            if body == prev:
+                repeat += 1
+                if repeat == 2:                 # 连续第 3 次出现才报
+                    findings.append({"index": idx, "role": role, "kind": "重复",
+                                     "reason": "与上一行完全相同", "text": body[:60]})
+            else:
+                repeat = 0
+            prev = body
+
+            bad = sum(1 for ch in body if ch in _GARBLE_CHARS)
+            if bad >= 3 or (len(body) > 8 and bad / len(body) > 0.25):
+                findings.append({"index": idx, "role": role, "kind": "乱码",
+                                 "reason": f"可疑字符 {bad} 个", "text": body[:60]})
+            elif len(set(body)) == 1 and len(body) > 4:
+                findings.append({"index": idx, "role": role, "kind": "乱码",
+                                 "reason": "整行同一个字符", "text": body[:60]})
+
+    return {"chapter": chapter, "source": source, "total": len(lines),
+            "findings": findings,
+            "stats": {k: sum(1 for f in findings if f["kind"] == k)
+                      for k in ("水印", "广告", "乱码", "重复")}}
+
+
+def skip_lines(chapter: str, indexes: list[int]) -> dict:
+    """批量设为不朗读：从大到小删，保证行号不错位"""
+    path = translate.translated_path(chapter)
+    if not os.path.exists(path):
+        raise FileNotFoundError("这一章还没有转译稿")
+    lines = [ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()]
+    removed = []
+    for i in sorted(set(indexes), reverse=True):
+        if 1 <= i <= len(lines):
+            removed.append(lines.pop(i - 1))
+    translate.save_translated(chapter, lines)
+    return {"removed": len(removed), "restore": removed[::-1]}
+
+
 def save_voice_map(vm: dict) -> str:
     ensure_dirs()
     with open(VOICE_MAP_PATH, "w", encoding="utf-8") as f:

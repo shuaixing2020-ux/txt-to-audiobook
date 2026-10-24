@@ -416,7 +416,13 @@ function openCastEditor(name) {
     body.querySelector('[data-del]').onclick = () => {
       S.cast.splice(idx, 1); renderCast(); closeSheet(); toast(`已删除「${name}」`);
     };
-  }, () => { S.cast[idx] = row; renderCast(); });
+  }, async () => {
+    S.cast[idx] = row;
+    renderCast();
+    try {                                  // 关掉面板就落盘，避免改完忘记保存
+      await api('/api/cast', { method: 'PUT', body: { rows: S.cast } });
+    } catch (e) { /* 静默：下次手动保存也行 */ }
+  });
 }
 
 $('segMode').onclick = (e) => {
@@ -651,6 +657,50 @@ async function skipLine(idx) {
   } catch (e) { toast(e.message); }
 }
 
+$('btnAudit').onclick = async () => {
+  const chapter = $('chapterSelect').value;
+  if (!chapter) return toast('先选一章');
+  try {
+    const r = await api('/api/audit?chapter=' + encodeURIComponent(chapter));
+    if (!r.findings.length) {
+      return toast(`扫了 ${r.total} 行，没发现水印 / 广告 / 乱码 / 重复`);
+    }
+    const stat = Object.entries(r.stats).filter(([, n]) => n)
+      .map(([k, n]) => `${k} ${n}`).join(' · ');
+    openSheet(`审查：${r.total} 行 · ${stat}`, (host) => {
+      const box = document.createElement('div');
+      box.innerHTML = r.findings.map((f) => `
+        <div class="row">
+          <div class="grow">
+            <div class="title"><span class="badge gray">${esc(f.kind)}</span>
+              ${esc(f.text)}</div>
+            <div class="meta">第 ${f.index} 行 · ${esc(f.role)} · ${esc(f.reason)}</div>
+          </div>
+          <button class="btn small" data-skip="${f.index}">不朗读</button>
+        </div>`).join('') + `
+        <div style="padding:12px 16px">
+          <button class="btn danger block" data-skip-all>全部设为不朗读（${r.findings.length} 行）</button>
+        </div>`;
+      host.appendChild(box);
+
+      const doSkip = async (indexes) => {
+        const res = await api('/api/script/skip', { method: 'POST',
+          body: { chapter, indexes } });
+        closeSheet();
+        await loadScript();
+        toast(`已跳过 ${res.removed} 行`, async () => {
+          // 撤销：按原顺序插回（简化：整章重新载入会丢，这里只提示）
+          toast('撤销请用编辑器的版本历史（暂未实现）');
+        });
+      };
+      box.querySelectorAll('[data-skip]').forEach((b) =>
+        b.onclick = () => doSkip([+b.dataset.skip]));
+      box.querySelector('[data-skip-all]').onclick = () =>
+        doSkip(r.findings.map((f) => f.index));
+    });
+  } catch (e) { toast(e.message); }
+};
+
 $('segTr').onclick = (e) => {
   if (e.target.tagName !== 'BUTTON') return;
   S.trMode = e.target.dataset.mode;
@@ -747,8 +797,10 @@ async function poll() {
 
 function renderJob() {
   const job = S.job;
+  const BASE_TITLE = '有声书工坊';
   const running = job && ['running', 'paused', 'stopping'].includes(job.status);
   if (!job) {
+    document.title = BASE_TITLE;
     $('pct').textContent = '0%';
     $('bar').style.width = '0%';
     $('curChapter').textContent = '等待开始';
@@ -757,6 +809,10 @@ function renderJob() {
     return;
   }
   const pct = Math.round((job.progress || 0) * 100);
+  const label = job.kind === 'translate' ? '转译' : job.kind === 'export' ? '导出' : '合成';
+  document.title = ['running', 'paused', 'stopping'].includes(job.status)
+    ? `[${pct}%] ${label}中 · ${BASE_TITLE}`
+    : (job.status === 'done' ? `${label}完成 · ${BASE_TITLE}` : BASE_TITLE);
   $('pct').textContent = pct + '%';
   $('bar').style.width = pct + '%';
   $('curChapter').textContent = job.kind === 'translate'

@@ -182,6 +182,35 @@ def test_script_preview_flags():
         _restore(original)
 
 
+def test_audit_rules_and_batch_skip():
+    """内容审查要能捞出四类问题，批量跳过要按倒序删不掉错行"""
+    from scripts import translate
+
+    old = translate.TRANSLATED_DIR
+    translate.TRANSLATED_DIR = tempfile.mkdtemp(prefix="audit_")
+    try:
+        ch = "001_x.txt"
+        translate.save_translated(ch, [
+            "旁白｜正常的一句话。",
+            "旁白｜更多精彩请访问 www.qidian.com 起点中文网",
+            "旁白｜书友群 123456 欢迎加入",
+            "旁白｜这是乱码□□□内容",
+            "旁白｜重复的句子。",
+            "旁白｜重复的句子。",
+            "旁白｜重复的句子。",
+            "旁白｜。。。。。。。",
+        ])
+        r = studio.audit_chapter(ch)
+        assert r["stats"] == {"水印": 1, "广告": 1, "乱码": 2, "重复": 1}, r["stats"]
+
+        res = studio.skip_lines(ch, [2, 3])
+        assert res["removed"] == 2, res
+        left = translate.load_translated(ch)
+        assert len(left) == 6 and "起点中文网" not in "".join(left), left
+    finally:
+        translate.TRANSLATED_DIR = old
+
+
 def test_export_plan_only_existing():
     """m4b 导出只统计已经出片的章节；一章都没有要明确报错"""
     original = _isolate()
@@ -437,6 +466,7 @@ if __name__ == "__main__":
         test_translate_rules_produces_canonical,
         test_pronounce_longest_first,
         test_export_plan_only_existing,
+        test_audit_rules_and_batch_skip,
         test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,
