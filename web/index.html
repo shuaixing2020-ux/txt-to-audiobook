@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>有声书工坊</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div class="shell">
+  <!-- 桌面：左侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>有声书工坊</h1>
+      <p>导入 · 角色 · 校对 · 合成 · 作品</p>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot">
+      <span class="engine-pill" id="enginePill">引擎加载中</span>
+      <button class="nav-item" data-tab="settings">设置</button>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <!-- 书架 -->
+    <section class="page" id="page-shelf">
+      <div class="page-head">
+        <div>
+          <h2>书架</h2>
+          <p class="sub" id="shelfSub">导入一本 txt，先看清章节再动手</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="btnPickFile">选择文件</button>
+        </div>
+      </div>
+      <div class="card" id="uploadCard">
+        <div class="row" style="padding:22px 16px;justify-content:center;text-align:center;flex-direction:column;gap:6px" id="dropZone">
+          <div class="title">拖入小说 txt</div>
+          <div class="meta">支持 UTF-8 / GBK，自动识别编码</div>
+        </div>
+      </div>
+      <input type="file" id="fileInput" accept=".txt" hidden>
+
+      <div id="bookBox" style="display:none">
+        <div class="section-title">当前书籍</div>
+        <div class="card" id="bookCard"></div>
+
+        <div id="splitBox">
+        <div class="section-title">切章</div>
+        <div class="card">
+          <div class="row">
+            <div class="grow"><div class="title">章节标题正则</div><div class="meta">匹配「第X章 / 序章 / 楔子 / 番外」</div></div>
+          </div>
+          <div class="field"><label>正则</label><input type="text" id="pattern" value="^\s*(?:第[0-9一二三四五六七八九十百千零两]+[章节回卷]|序章|楔子|引子|前言|后记|番外)"></div>
+          <div class="field"><label>单章上限</label><input type="range" id="maxChars" min="2000" max="20000" step="500" value="8000"><span class="suffix" id="maxCharsVal">8000</span></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn" id="btnPreview">预览章节</button>
+          <button class="btn primary" id="btnWrite">写入书架</button>
+        </div>
+        </div>
+      </div>
+
+      <div id="chapterBox" style="display:none">
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>章节</span>
+            <span style="display:flex;gap:8px">
+              <button class="btn small" id="btnSelectAll">全选</button>
+              <button class="btn small" id="btnSelectNone">反选</button>
+            </span>
+          </div>
+          <div class="card"><div class="list-scroll" id="chapterList"></div></div>
+          <div class="hint" id="selectSummary">已选 0 章</div>
+          <button class="btn primary block" id="btnNextCast">下一步：确认角色</button>
+      </div>
+    </section>
+
+    <!-- 角色 -->
+    <section class="page" id="page-cast">
+      <div class="page-head">
+        <div><h2>角色</h2><p class="sub" id="castSub">识别出人物，确认音色后再合成</p></div>
+        <div class="head-actions">
+          <div class="segmented" id="segMode">
+            <button data-mode="rule">本地规则</button>
+            <button data-mode="llm" class="on">大模型</button>
+          </div>
+          <button class="btn primary" id="btnAnalyze">识别人物</button>
+        </div>
+      </div>
+      <div class="card" id="castCard"><div class="empty"><div class="big">还没有角色</div>点「识别人物」自动生成，或从角色库载入</div></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn" id="btnRestyle">应用年龄 / 情绪</button>
+        <button class="btn" id="btnSaveCast">保存为默认</button>
+        <button class="btn" id="btnLibSave">存入角色库</button>
+      </div>
+      <div class="section-title">角色库</div>
+      <div class="card" id="libCard"><div class="hint">把常用的角色存进库，换书时一键载入，音色保持一致。</div></div>
+    </section>
+
+    <!-- 校对 -->
+    <section class="page" id="page-script">
+      <div class="page-head">
+        <div><h2>校对</h2><p class="sub" id="scriptSub">谁在说、哪些不朗读，一眼看清</p></div>
+        <div class="head-actions">
+          <select id="chapterSelect" style="height:36px;border-radius:10px;background:var(--fill);border:none;padding:0 12px;font-size:14px"></select>
+          <div class="segmented" id="segTr">
+            <button data-mode="llm" class="on">大模型转译</button>
+            <button data-mode="rules">本地规则</button>
+          </div>
+          <button class="btn primary" id="btnTranslate">开始转译</button>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="row" style="gap:10px">
+          <div class="segmented" id="segFilter">
+            <button data-f="all" class="on">全部</button>
+            <button data-f="dialog">仅对白</button>
+            <button data-f="skip">仅不朗读</button>
+          </div>
+          <div class="grow"></div>
+          <span class="value" id="scriptStats">—</span>
+        </div>
+      </div>
+      <div class="card"><div id="bubbleList" style="max-height:56vh;overflow-y:auto;padding:8px 0">
+        <div class="empty"><div class="big">还没有剧本</div>选一章后点「开始转译」，或先确认角色</div>
+      </div></div>
+    </section>
+
+    <!-- 合成 -->
+    <section class="page" id="page-synth">
+      <div class="page-head">
+        <div><h2>合成</h2><p class="sub" id="synthSub">可随时暂停 / 停止，已合成的句子会保留</p></div>
+        <div class="head-actions">
+          <span class="engine-pill" id="enginePill2">—</span>
+          <button class="btn" id="btnSettings">设置</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="progress-hero">
+          <div class="pct" id="pct">0%</div>
+          <div class="cur" id="curChapter">等待开始</div>
+        </div>
+        <div style="padding:0 16px 16px">
+          <div class="track"><i id="bar" style="width:0%"></i></div>
+          <div class="counts">
+            <span>成功 <b id="cOk">0</b></span>
+            <span>跳过 <b id="cSkip">0</b></span>
+            <span>失败 <b id="cFail">0</b></span>
+            <span>已用 <b id="cTime">00:00</b></span>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;justify-content:center;padding-bottom:14px">
+          <button class="btn" id="btnPause" disabled>暂停</button>
+          <button class="btn" id="btnSkip" disabled>跳过本章</button>
+          <button class="btn danger" id="btnStop" disabled>停止</button>
+        </div>
+      </div>
+
+      <div class="section-title">队列</div>
+      <div class="card"><div id="queueList" class="list-scroll"><div class="hint">在书架里勾选章节后，回到这里开始合成。</div></div></div>
+      <button class="btn primary block" id="btnStart" style="margin-top:12px">开始合成</button>
+    </section>
+
+    <!-- 作品 -->
+    <section class="page" id="page-works">
+      <div class="page-head">
+        <div><h2>作品</h2><p class="sub" id="worksSub">试听、下载，或删掉不满意的版本</p></div>
+        <div class="head-actions"><button class="btn" id="btnRefreshWorks">刷新</button></div>
+      </div>
+      <div class="card" id="worksCard"><div class="empty"><div class="big">还没有成品</div>合成完成后会出现在这里</div></div>
+    </section>
+  </main>
+</div>
+
+<!-- 移动端底部 TabBar -->
+<nav class="tabbar" id="tabbar"></nav>
+
+<!-- 常驻迷你进度 -->
+<div class="mini-bar" id="miniBar">
+  <span id="miniText">合成中</span>
+  <div class="grow"><div class="track"><i id="miniFill" style="width:0%"></i></div></div>
+  <span id="miniPct">0%</span>
+</div>
+
+<!-- 遮罩 / 面板 / Toast -->
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h3 id="sheetTitle">—</h3><button class="btn small" id="sheetClose">完成</button></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+<div class="toast-host" id="toastHost"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

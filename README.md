@@ -44,8 +44,11 @@ pip install -r requirements.txt
 # macOS 需要 ffmpeg
 brew install ffmpeg
 
-python app.py            # → http://127.0.0.1:7860
+python server.py         # → http://127.0.0.1:7860（iOS 风格界面）
 ```
+
+> `app.py` 是早期 Gradio 版界面，仍可运行（`python app.py`），但交互受框架限制；
+> 新界面是 FastAPI + 原生前端，Sheet / ActionSheet / 拖拽 / 气泡都能做到位。
 
 没有网络时用离线引擎：
 
@@ -55,11 +58,14 @@ AUDIOBOOK_ENGINE=say python app.py
 
 ---
 
-## 使用流程（网页六步）
+## 使用流程（五个 Tab，顺序即流程）
 
 ```
-① 导入与切章 → ② 人物与配音 → ③ 文本转译 → ④ 剧本校对 → ⑤ 合成 → ⑥ 产物库
+书架 → 角色 → 校对 → 合成 → 作品
 ```
+
+- 桌面：左侧边栏 + 内容区（iPadOS 分栏）
+- 手机：底部 TabBar；长任务在其他 Tab 时底部有迷你进度条，点按回到合成页
 
 1. 拖入 txt，点「预览章节」看目录，再「写入 samples/」
 2. 「识别人物」自动填表（勾选「用大模型识别」更准），可直接改声音/年龄/情绪/别名
@@ -104,7 +110,10 @@ AUDIOBOOK_ENGINE=say python app.py
 
 ```
 .
-├── app.py                     # 网页界面（Gradio），只做绑定
+├── server.py                  # 🆕 FastAPI 服务：把 studio.py 暴露成 HTTP 接口 + 托管前端
+├── web/                       # 🆕 前端（原生 HTML/CSS/JS，无构建）
+│   ├── index.html  app.css  app.js
+├── app.py                     # 早期 Gradio 界面（保留）
 ├── scripts/
 │   ├── studio.py              # 服务层：切章/配音表/角色库/剧本预览/后台任务/产物
 │   ├── translate.py           # 文本转译：规则版 + 大模型逐章版
@@ -123,6 +132,14 @@ AUDIOBOOK_ENGINE=say python app.py
 ```
 
 ---
+
+## 界面（iOS HIG）
+
+- 大标题 + Inset Grouped 列表；卡片圆角 12、按钮 14、0.5px 分隔线
+- 底部 Sheet 编辑角色（年龄/情绪分段控件、语速音调滑杆、试听）
+- 气泡式剧本校对：旁白居中灰字、角色左右交替并按角色上色，点气泡弹 ActionSheet
+- 危险操作（停止）走 ActionSheet，文案写明「不产出半成品、可续跑」
+- 全程只用文字与颜色表达状态，不用图标图案；支持 `prefers-reduced-motion`
 
 ## 技术要点
 

@@ -85,7 +85,8 @@
 
 ```bash
 cd ~/Desktop/小说音频
-.venv/bin/python app.py            # → http://127.0.0.1:7860
+.venv/bin/python server.py         # → http://127.0.0.1:7860（iOS 风格新界面）
+.venv/bin/python app.py            # 旧 Gradio 界面（保留）
 # 网络不通、想立刻出片：
 AUDIOBOOK_ENGINE=say .venv/bin/python app.py
 ```
@@ -484,3 +485,18 @@ git diff            # 先看本地修改
 | 修 bug | ①代词替换误伤「其他/他们」 ②`hunyuan-role` 给 system 提示词就"入戏"，改用单条用户消息 ③LLM 请求加 3 次重试（代理偶发 502） |
 | 测试 | `test_studio` 13→16 例（新增转译格式、分块守恒、任务落盘）；四个测试文件共 27 例全绿 |
 | 实跑 | 35 章全书大模型转译：5 分 20 秒 / 35 成功 / 2177 行脚本；抽样复检「其他/他们」误替换 0 命中 |
+
+## 17. v3.0 变更清单（iOS 风格界面）
+
+| 类别 | 内容 |
+| --- | --- |
+| 架构 | 按方案 C 拆分：`server.py`（FastAPI）薄封装 `studio.py`，`web/` 原生前端；Gradio 版 `app.py` 保留为旧界面 |
+| 信息架构 | 六步 → 五个 Tab（书架 / 角色 / 校对 / 合成 / 作品）+ 右上设置；桌面左侧边栏，≤900px 切底部 TabBar |
+| 书架 | 拖入 txt → 自动切章预览 → 写入；圆形勾选、全选/反选、已选章数与预计时长 |
+| 角色 | 分段控件切「本地规则 / 大模型」；行内头像+音色·年龄·情绪摘要；点击弹 Sheet 编辑（分段控件 + 滑杆 + 试听 + 存库）；原生拖拽排序 |
+| 校对 | 气泡式：旁白居中、角色左右交替并按角色上色；点气泡弹 ActionSheet（试听 / 改说话人 / 设为不朗读，后者带撤销 Toast） |
+| 合成 | 大百分比 + 进度条 + 队列；暂停/继续、跳过本章、停止（红色 + ActionSheet 说明后果）；其他 Tab 底部迷你进度条 |
+| 作品 | 列表试听 / 下载 / 删除 |
+| 设置 | Sheet：引擎、并发、句间间隔、大模型（预设/地址/模型/Key 掩码/测试连接） |
+| 接口 | `/api/bootstrap` `/api/upload` `/api/split` `/api/cast/*` `/api/script` `/api/script/edit` `/api/translate` `/api/job/*` `/api/preview` `/api/audio/*` `/api/outputs` `/api/settings` `/api/llm/*` |
+| 验证 | 桌面 1440×900 与移动 390×844 全页面截图，console 0 报错；44 句气泡、9 个角色、35 章队列、7 个产物均正常渲染 |
