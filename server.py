@@ -390,6 +390,30 @@ def line_audio(req: LineAudioReq):
             "voice": voice, "ms": mp3_duration_ms(audio)}
 
 
+class ExportReq(BaseModel):
+    chapters: list[str]
+    title: str = "有声书"
+    author: str = ""
+
+
+@app.post("/api/export")
+def export_m4b(req: ExportReq):
+    try:
+        studio.start_export_job(req.chapters, req.title, req.author)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True}
+
+
+@app.get("/api/export/plan")
+def export_plan(chapters: str = ""):
+    """预览能导出几章（只统计已出片的）"""
+    names = [c for c in chapters.split("|") if c] or studio.list_chapters()
+    plan = studio.export_plan(names)
+    return {"count": len(plan), "minutes": round(sum(p[2] for p in plan) / 60000, 1),
+            "names": [p[0] for p in plan]}
+
+
 @app.get("/api/pronounce")
 def get_pronounce():
     return {"items": studio.pronounce_rows()}
@@ -434,7 +458,8 @@ def audio_output(name: str):
     path = os.path.join(studio.OUTPUT_DIR, name)
     if not os.path.exists(path):
         raise HTTPException(404, "文件不存在")
-    return FileResponse(path, media_type="audio/mpeg")
+    media = "audio/mp4" if name.lower().endswith(".m4b") else "audio/mpeg"
+    return FileResponse(path, media_type=media)
 
 
 # ─────────────────────────────────────────────────────

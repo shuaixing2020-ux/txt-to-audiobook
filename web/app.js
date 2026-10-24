@@ -52,7 +52,7 @@ function setTab(name) {
     b.classList.toggle('on', b.dataset.tab === name));
   $('main').scrollTop = 0;
   if (name === 'script') loadChapterOptions();
-  if (name === 'works') loadWorks();
+  if (name === 'works') { loadWorks(); loadExportPlan(); }
   if (name === 'synth') renderQueue();
   updateMini();
 }
@@ -761,7 +761,9 @@ function renderJob() {
   $('bar').style.width = pct + '%';
   $('curChapter').textContent = job.kind === 'translate'
     ? `转译中 · ${job.current || job.detail || ''}`
-    : (job.detail || (job.status === 'done' ? '已完成' : `第 ${job.index}/${job.total} 章`));
+    : job.kind === 'export'
+      ? (job.detail || (job.status === 'done' ? '导出完成' : '正在导出…'))
+      : (job.detail || (job.status === 'done' ? '已完成' : `第 ${job.index}/${job.total} 章`));
   $('cOk').textContent = job.ok; $('cSkip').textContent = job.skip; $('cFail').textContent = job.fail;
   const sec = Math.floor(job.elapsed || 0);
   $('cTime').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
@@ -771,8 +773,15 @@ function renderJob() {
   $('btnStop').disabled = !running;
   $('btnPause').textContent = job.status === 'paused' ? '继续' : '暂停';
 
-  if (!running && job.status === 'done' && S.tab !== 'works') {
-    if (!S._doneShown) { S._doneShown = true; loadWorks(); loadChapterOptions(); }
+  if (!running && job.status === 'done') {
+    if (!S._doneShown) {
+      S._doneShown = true;
+      loadWorks(); loadChapterOptions();
+      if (job.kind === 'export' && job.out_path) {
+        toast(`已导出 ${job.out_path.split('/').pop()}`);
+        setTab('works');
+      }
+    }
   }
   if (running) S._doneShown = false;
   renderQueue();
@@ -814,7 +823,8 @@ function updateMini() {
   const pct = Math.round((job.progress || 0) * 100);
   $('miniFill').style.width = pct + '%';
   $('miniPct').textContent = pct + '%';
-  $('miniText').textContent = job.kind === 'translate' ? '转译中' : '合成中';
+  $('miniText').textContent = job.kind === 'translate' ? '转译中'
+    : job.kind === 'export' ? '导出中' : '合成中';
 }
 $('miniBar').onclick = () => setTab('synth');
 
@@ -854,6 +864,31 @@ function renderWorks(list) {
   });
 }
 $('btnRefreshWorks').onclick = () => loadWorks();
+
+async function loadExportPlan() {
+  const list = S.chapters.filter((c) => S.selected.has(c.file));
+  const files = (list.length ? list : S.chapters).map((c) => c.file);
+  try {
+    const r = await api('/api/export/plan?chapters=' + encodeURIComponent(files.join('|')));
+    $('exportMeta').textContent = r.count
+      ? `可导出 ${r.count} 章 · 约 ${r.minutes} 分钟（只统计已出片的）`
+      : '还没有成品，先去合成';
+  } catch (e) { /* 忽略 */ }
+}
+
+$('btnExport').onclick = async () => {
+  const chapters = S.chapters.filter((c) => S.selected.has(c.file));
+  const list = chapters.length ? chapters : S.chapters;
+  try {
+    await api('/api/export', { method: 'POST', body: {
+      chapters: list.map((c) => c.file),
+      title: $('bookTitle').value.trim() || '有声书',
+      author: $('bookAuthor').value.trim(),
+    } });
+    startPolling();
+    toast('开始导出，进度见下方');
+  } catch (e) { toast(e.message); }
+};
 
 /* ── 设置 ───────────────────────────────────────────── */
 function openSettings() {

@@ -182,6 +182,29 @@ def test_script_preview_flags():
         _restore(original)
 
 
+def test_export_plan_only_existing():
+    """m4b 导出只统计已经出片的章节；一章都没有要明确报错"""
+    original = _isolate()
+    try:
+        _prep_chapters(2)
+        assert studio.export_plan(["001_t.txt", "002_t.txt"]) == []
+        try:
+            studio.ExportJob(["001_t.txt"])
+        except RuntimeError as e:
+            assert "还没有成品" in str(e), e
+        else:
+            raise AssertionError("没有成品时应该报错")
+
+        # 造一个假的成品
+        fake = os.path.join(studio.OUTPUT_DIR, "001_t.mp3")
+        with open(fake, "wb") as f:
+            f.write(b"ID3\x00" + b"\x00" * 100)
+        plan = studio.export_plan(["001_t.txt", "002_t.txt"])
+        assert len(plan) == 1 and plan[0][0] == "001_t", plan
+    finally:
+        _restore(original)
+
+
 def test_translate_chunks_and_similarity():
     from scripts import translate
 
@@ -413,6 +436,7 @@ if __name__ == "__main__":
         test_move_role_reorders_rows,
         test_translate_rules_produces_canonical,
         test_pronounce_longest_first,
+        test_export_plan_only_existing,
         test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,

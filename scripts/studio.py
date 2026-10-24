@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1065,6 +1066,137 @@ def start_translate_job(chapters: list[str], voice_map: dict,
         return _CURRENT_JOB
 
 
+# ─────────────────────────────────────────────────────
+# 导出 m4b（带章节标记，手机播放器可按章跳转）
+# ─────────────────────────────────────────────────────
+def export_plan(chapters: list[str]) -> list[tuple[str, str, int]]:
+    """[(章节名, mp3 路径, 时长ms)]，只保留已经出片的"""
+    plan = []
+    for fn in chapters:
+        name = os.path.splitext(fn)[0]
+        mp3 = os.path.join(OUTPUT_DIR, f"{name}.mp3")
+        if os.path.exists(mp3):
+            plan.append((name, mp3, gen.mp3_duration_ms(mp3)))
+    return plan
+
+
+class ExportJob(SynthesisJob):
+    """把若干章 MP3 合成一个带章节标记的 m4b
+
+    复用 Job 的暂停/停止/快照机制；ffmpeg 的 -progress 输出用来算真实进度。
+    """
+
+    def __init__(self, chapters: list[str], title: str = "有声书", author: str = ""):
+        plan = export_plan(chapters)
+        if not plan:
+            raise RuntimeError("这些章节还没有成品 MP3，先合成")
+        tasks = [{"kind": "export", "name": n, "path": p, "ms": ms} for n, p, ms in plan]
+        super().__init__(tasks, {}, force=True, kind="export")
+        self.title = (title or "有声书").strip()
+        self.author = (author or "").strip()
+        self.total_ms = sum(t["ms"] for t in tasks)
+        self.out_path = ""
+
+    def snapshot(self) -> dict:
+        snap = super().snapshot()
+        snap["out_path"] = self.out_path
+        return snap
+
+    def _run(self) -> None:
+        self._set(status="running", started_at=time.time())
+        total_min = self.total_ms / 60000
+        self._log(f"导出《{self.title}》· {self.total} 章 · 约 {total_min:.1f} 分钟音频")
+        self._log("正在转 AAC 并写入章节标记，时长较长时请耐心等待…")
+
+        td = tempfile.mkdtemp(prefix="m4b_")
+        listfile = os.path.join(td, "list.txt")
+        metafile = os.path.join(td, "meta.txt")
+        out = os.path.join(OUTPUT_DIR, f"{safe_name(self.title)}.m4b")
+
+        with open(listfile, "w", encoding="utf-8") as f:
+            for t in self.tasks:
+                f.write("file '" + t["path"].replace("'", "'\\''") + "'\n")
+
+        with open(metafile, "w", encoding="utf-8") as f:
+            f.write(";FFMETADATA1\n")
+            f.write(f"title={self.title}\n")
+            if self.author:
+                f.write(f"artist={self.author}\n")
+            start = 0
+            for t in self.tasks:
+                f.write("[CHAPTER]\nTIMEBASE=1/1000\n")
+                f.write(f"START={start}\nEND={start + t['ms']}\n")
+                f.write(f"title={t['name']}\n")
+                start += t["ms"]
+
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+               "-i", listfile, "-i", metafile, "-map_metadata", "1",
+               "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart",
+               "-progress", "pipe:1", "-nostats", out]
+
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+        except OSError as e:
+            self._log(f"❌ 起不了 ffmpeg：{e}")
+            self._set(status="done", finished_at=time.time())
+            return
+
+        total_s = max(self.total_ms / 1000, 1)
+        for line in proc.stdout:                   # 实时读 ffmpeg 进度
+            if self._stop.is_set():
+                proc.terminate()
+                break
+            line = line.strip()
+            if line.startswith("out_time="):
+                sec = _parse_hhmmss(line.split("=", 1)[1])
+                with self._lock:
+                    self.progress = min(0.99, sec / total_s)
+                    self.detail = f"已转换 {sec/60:.1f}/{total_s/60:.1f} 分钟"
+        code = proc.wait()
+        err = (proc.stderr.read() or "").strip()[:300] if proc.stderr else ""
+
+        if self._stop.is_set():
+            self._log("⏹ 已停止导出，未生成文件")
+            self._set(status="stopped", finished_at=time.time())
+            shutil.rmtree(td, ignore_errors=True)
+            return
+        if code != 0 or not os.path.exists(out):
+            self._log(f"❌ ffmpeg 失败（{code}）：{err}")
+            self._set(status="done", finished_at=time.time())
+            shutil.rmtree(td, ignore_errors=True)
+            return
+
+        self.out_path = out
+        size_mb = os.path.getsize(out) / 1024 / 1024
+        with self._lock:
+            self.ok = 1
+            self.progress = 1.0
+            self.detail = f"{os.path.basename(out)} · {size_mb:.1f} MB"
+        self._log(f"✅ 已导出 {os.path.basename(out)} · {size_mb:.1f} MB · "
+                  f"{self.total} 章 / {total_min:.1f} 分钟")
+        self._set(status="done", finished_at=time.time())
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _parse_hhmmss(text: str) -> float:
+    try:
+        h, m, s = text.strip().split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def start_export_job(chapters: list[str], title: str, author: str = "") -> ExportJob:
+    global _CURRENT_JOB
+    with _JOB_LOCK:
+        if _CURRENT_JOB is not None and _CURRENT_JOB.is_running():
+            raise RuntimeError("已有任务在跑，请先停止它")
+        job = ExportJob(chapters, title, author)
+        _CURRENT_JOB = job.start()
+        return _CURRENT_JOB
+
+
 def translated_summary() -> dict[str, int]:
     return translate.list_translated()
 
@@ -1096,7 +1228,8 @@ def list_outputs() -> list[list]:
     if not os.path.isdir(OUTPUT_DIR):
         return []
     rows = []
-    for fn in sorted(f for f in os.listdir(OUTPUT_DIR) if f.lower().endswith(".mp3")):
+    for fn in sorted(f for f in os.listdir(OUTPUT_DIR)
+                     if f.lower().endswith((".mp3", ".m4b"))):
         p = os.path.join(OUTPUT_DIR, fn)
         st = os.stat(p)
         rows.append([fn, round(st.st_size / 1024 / 1024, 2),
