@@ -888,6 +888,7 @@ $('miniBar').onclick = () => setTab('synth');
 async function loadWorks(list) {
   try {
     const data = list ? { outputs: list } : await api('/api/outputs');
+    S.outputs = data.outputs;
     renderWorks(data.outputs);
   } catch (e) { toast(e.message); }
 }
@@ -899,25 +900,150 @@ function renderWorks(list) {
     return;
   }
   card.innerHTML = list.map(([name, mb, mtime]) => `
-    <div class="row">
+    <div class="row" data-row="${esc(name)}">
       <div class="grow">
-        <div class="title">${esc(name.replace('.mp3', ''))}</div>
+        <div class="title">${esc(name.replace(/\.(mp3|m4b)$/i, ''))}
+          ${name.toLowerCase().endsWith('.m4b') ? '<span class="badge">整本</span>' : ''}</div>
         <div class="meta">${mb} MB · ${esc(mtime)}</div>
       </div>
       <button class="btn small" data-play="${esc(name)}">播放</button>
-      <a class="btn small" href="/api/audio/output/${encodeURIComponent(name)}" download>下载</a>
+      <button class="btn small" data-more="${esc(name)}">更多</button>
     </div>`).join('');
 
   card.querySelectorAll('[data-play]').forEach((b) => {
-    b.onclick = () => {
-      if (S.playing) { S.playing.pause(); S.playing = null; }
-      const audio = new Audio('/api/audio/output/' + encodeURIComponent(b.dataset.play));
-      audio.play();
-      S.playing = audio;
-      b.textContent = '播放中';
-      audio.onended = () => { b.textContent = '播放'; S.playing = null; };
+    b.onclick = () => togglePlay(b.dataset.play);
+  });
+  card.querySelectorAll('[data-more]').forEach((b) => {
+    b.onclick = () => openOutputActions(b.dataset.more);
+  });
+  markPlayingRow();
+}
+
+/* ── 播放器 ─────────────────────────────────────────── */
+const P = { audio: new Audio(), list: [], idx: -1, name: null };
+
+function fmtTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function playerInit() {
+  const a = P.audio;
+  a.addEventListener('timeupdate', () => {
+    $('pCur').textContent = fmtTime(a.currentTime);
+    if (!S._seeking) {
+      $('pSeek').value = a.duration ? Math.round((a.currentTime / a.duration) * 1000) : 0;
+    }
+  });
+  a.addEventListener('loadedmetadata', () => {
+    $('pDur').textContent = fmtTime(a.duration);
+  });
+  a.addEventListener('play', () => { $('pToggle').textContent = '暂停'; });
+  a.addEventListener('pause', () => { $('pToggle').textContent = '播放'; });
+  a.addEventListener('ended', () => { playerStep(1, true); });
+
+  $('pToggle').onclick = () => {
+    if (!P.name) return toast('先从列表里选一个');
+    P.audio.paused ? P.audio.play() : P.audio.pause();
+  };
+  $('pBack').onclick = () => { P.audio.currentTime = Math.max(0, P.audio.currentTime - 15); };
+  $('pFwd').onclick = () => { P.audio.currentTime = Math.min(P.audio.duration || 0, P.audio.currentTime + 15); };
+  $('pPrev').onclick = () => playerStep(-1);
+  $('pNext').onclick = () => playerStep(1);
+  $('pRate').onchange = (e) => { P.audio.playbackRate = +e.target.value; };
+  $('pSeek').oninput = (e) => {
+    S._seeking = true;
+    if (P.audio.duration) P.audio.currentTime = (e.target.value / 1000) * P.audio.duration;
+  };
+  $('pSeek').onchange = () => { S._seeking = false; };
+}
+
+function togglePlay(name) {
+  if (P.name === name) {                       // 同一首：暂停/继续
+    P.audio.paused ? P.audio.play() : P.audio.pause();
+    return;
+  }
+  playOutput(name);
+}
+
+function playOutput(name) {
+  P.list = (S.outputs || []).map((o) => o[0]);
+  P.idx = P.list.indexOf(name);
+  P.name = name;
+  P.audio.src = '/api/audio/output/' + encodeURIComponent(name);
+  P.audio.playbackRate = +$('pRate').value;
+  P.audio.play().catch(() => {});
+  $('pTitle').textContent = name.replace(/\.(mp3|m4b)$/i, '');
+  $('player').classList.add('on');
+  document.body.classList.add('has-player');
+  markPlayingRow();
+}
+
+function playerStep(delta, fromEnd) {
+  if (!P.list.length) return;
+  const next = P.idx + delta;
+  if (next < 0 || next >= P.list.length) {
+    if (fromEnd) { P.audio.pause(); markPlayingRow(); }
+    return toast(delta > 0 ? '已经是最后一个' : '已经是第一个');
+  }
+  playOutput(P.list[next]);
+}
+
+function markPlayingRow() {
+  document.querySelectorAll('[data-row]').forEach((row) => {
+    const on = row.dataset.row === P.name;
+    row.style.background = on ? 'rgba(0,122,255,.06)' : '';
+    const b = row.querySelector('[data-play]');
+    if (b) b.textContent = on && !P.audio.paused ? '暂停' : '播放';
+  });
+}
+
+function openOutputActions(name) {
+  const isM4b = name.toLowerCase().endsWith('.m4b');
+  actionSheet(name, [
+    { label: P.name === name && !P.audio.paused ? '暂停播放' : '播放', onClick: () => togglePlay(name) },
+    { label: '下载', onClick: () => {
+      const a = document.createElement('a');
+      a.href = '/api/audio/output/' + encodeURIComponent(name);
+      a.download = name; a.click();
+    } },
+    ...(isM4b ? [] : [{ label: '重命名', onClick: () => renameOutput(name) }]),
+    { label: '删除', destructive: true, onClick: () => deleteOutput(name) },
+  ], isM4b ? '整本导出文件' : `${name}`);
+}
+
+function renameOutput(name) {
+  openSheet('重命名', (host) => {
+    const box = document.createElement('div');
+    const base = name.replace(/\.(mp3|m4b)$/i, '');
+    box.innerHTML = `
+      <div class="field"><label>新名字</label>
+        <input type="text" id="rnInput" value="${esc(base)}"></div>
+      <div style="padding:12px 16px"><button class="btn primary block" id="rnOk">保存</button></div>`;
+    host.appendChild(box);
+    box.querySelector('#rnOk').onclick = async () => {
+      try {
+        const r = await api('/api/outputs/rename', { method: 'POST',
+          body: { name, new_name: box.querySelector('#rnInput').value.trim() } });
+        if (P.name === name) { P.name = r.name; $('pTitle').textContent = r.name.replace(/\.[^.]+$/, ''); }
+        closeSheet(); await loadWorks(); toast('已重命名');
+      } catch (e) { toast(e.message); }
     };
   });
+}
+
+function deleteOutput(name) {
+  actionSheet('删除这个文件？', [
+    { label: '删除', destructive: true, onClick: async () => {
+      try {
+        await api('/api/outputs/' + encodeURIComponent(name), { method: 'DELETE' });
+        if (P.name === name) { P.audio.pause(); P.audio.src = ''; P.name = null;
+          $('player').classList.remove('on'); document.body.classList.remove('has-player'); }
+        await loadWorks(); toast('已删除');
+      } catch (e) { toast(e.message); }
+    } },
+  ], `${name}\n删除后不可恢复（源章节还在，可以重新合成）`);
 }
 $('btnRefreshWorks').onclick = () => loadWorks();
 
@@ -1089,6 +1215,8 @@ function openSettings() {
 $('btnSettings').onclick = openSettings;
 
 /* ── 启动 ───────────────────────────────────────────── */
+playerInit();
+
 boot().catch((e) => {
   document.body.innerHTML = `<div style="padding:40px;font-family:-apple-system">
     <h2>启动失败</h2><p>${esc(e.message)}</p></div>`;

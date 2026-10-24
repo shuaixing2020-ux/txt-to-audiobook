@@ -553,6 +553,32 @@ def outputs():
     return {"outputs": studio.list_outputs()}
 
 
+class RenameReq(BaseModel):
+    name: str
+    new_name: str
+
+
+@app.post("/api/outputs/rename")
+def rename_output(req: RenameReq):
+    import re as _re
+    old = os.path.basename(req.name)
+    new = os.path.basename(req.new_name.strip())
+    if not new:
+        raise HTTPException(400, "新名字不能为空")
+    ext = os.path.splitext(old)[1]
+    if not new.endswith(ext):
+        new += ext
+    new = _re.sub(r"[\\/:*?\"<>|]", "_", new)      # 去掉文件系统非法字符
+    src = os.path.join(studio.OUTPUT_DIR, old)
+    dst = os.path.join(studio.OUTPUT_DIR, new)
+    if not os.path.exists(src):
+        raise HTTPException(404, "文件不存在")
+    if os.path.exists(dst):
+        raise HTTPException(409, "已有同名文件")
+    os.rename(src, dst)
+    return {"ok": True, "name": new}
+
+
 @app.delete("/api/outputs/{name}")
 def delete_output(name: str):
     if "/" in name or ".." in name:

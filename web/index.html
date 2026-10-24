@@ -193,6 +193,31 @@
 <!-- 移动端底部 TabBar -->
 <nav class="tabbar" id="tabbar"></nav>
 
+<!-- 全局播放器 -->
+<div class="player" id="player">
+  <div class="player-main">
+    <div class="player-meta">
+      <div class="pt" id="pTitle">未在播放</div>
+      <div class="pm"><span id="pCur">00:00</span> / <span id="pDur">00:00</span></div>
+    </div>
+    <input type="range" id="pSeek" min="0" max="1000" value="0">
+    <div class="player-ctl">
+      <button class="pbtn" id="pPrev" title="上一章">上一章</button>
+      <button class="pbtn" id="pBack" title="后退 15 秒">-15s</button>
+      <button class="pbtn play" id="pToggle">播放</button>
+      <button class="pbtn" id="pFwd" title="前进 15 秒">+15s</button>
+      <button class="pbtn" id="pNext" title="下一章">下一章</button>
+      <select id="pRate" class="prate">
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1.0×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2.0×</option>
+      </select>
+    </div>
+  </div>
+</div>
+
 <!-- 常驻迷你进度 -->
 <div class="mini-bar" id="miniBar">
   <span id="miniText">合成中</span>
