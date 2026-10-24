@@ -157,6 +157,25 @@ def c_texts():
     return "ok", f"{len(good)} 个 txt 均为 UTF-8"
 
 
+FAST_CHECKS = [
+    ("Python 版本", c_python), ("虚拟环境", c_venv), ("Python 依赖", c_deps),
+    ("ffmpeg", c_ffmpeg), ("pydub 音频", c_pydub), ("合成引擎", c_engine),
+    ("TTS 域名", c_dns), ("端口", c_port),
+]
+
+
+def run_checks(include_network: bool = False) -> list[dict]:
+    """给网页「诊断」用：返回 [{name, status, detail}]，不打印"""
+    items = []
+    for name, fn in FAST_CHECKS + ([("TTS 联网", c_tts)] if include_network else []):
+        try:
+            status, detail = fn()
+        except Exception as e:  # noqa: BLE001
+            status, detail = "fail", f"{type(e).__name__}: {e}"
+        items.append({"name": name, "status": status, "detail": detail})
+    return items
+
+
 def main() -> int:
     print(f"工作目录：{ROOT}\n")
     for name, fn in [

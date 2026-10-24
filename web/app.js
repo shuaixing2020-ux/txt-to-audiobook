@@ -507,6 +507,29 @@ function renderScript() {
     return true;
   });
 
+  // 剧本里的角色如果不在配音表里，合成会静默回退成旁白音色 —— 这里主动提示
+  const castNames = new Set(S.cast.map((r) => r[0]));
+  const missing = (s.roles || []).map((r) => r.role)
+    .filter((r) => r && r !== '旁白' && !castNames.has(r));
+  $('missBox').innerHTML = missing.length ? `
+    <div class="card" style="margin-bottom:12px">
+      <div class="row">
+        <div class="grow">
+          <div class="title" style="color:#FF9500">${missing.length} 个角色没有配音</div>
+          <div class="meta">${esc(missing.slice(0, 6).join('、'))}${missing.length > 6 ? '…' : ''} · 不补会用旁白的声音念</div>
+        </div>
+        <button class="btn small" id="btnMerge">补全</button>
+      </div>
+    </div>` : '';
+
+  if (missing.length) {
+    $('btnMerge').onclick = async () => {
+      const r = await api('/api/cast/merge', { method: 'POST', body: { roles: missing } });
+      S.cast = r.cast; renderCast(); renderScript();
+      toast(`已补 ${r.added} 个角色，各分了独立音色`);
+    };
+  }
+
   if (!rows.length) {
     $('bubbleList').innerHTML = `<div class="empty"><div class="big">这一章还没转译</div>
       点右上「开始转译」，把原文改写成「角色｜台词」后再校对</div>`;
@@ -559,12 +582,23 @@ function openBubbleActions(idx) {
     } catch (e) { toast(e.message); }
   } }];
   if (!skipped) {
+    items.push({ label: '重做这一句', onClick: () => redoLine(idx) });
     items.push({ label: '改说话人', onClick: () => pickRole(idx) });
     items.push({ label: '设为不朗读', destructive: true, onClick: () => skipLine(idx) });
   }
   actionSheet(`第 ${idx} 句`, items,
     `${role}｜${text.slice(0, 40)}${text.length > 40 ? '…' : ''}`
     + (skipped ? '（这一句不会朗读）' : ''));
+}
+
+async function redoLine(idx) {
+  const chapter = $('chapterSelect').value;
+  toast('正在合成这一句…');
+  try {
+    const r = await api('/api/line/audio', { method: 'POST', body: { chapter, index: idx } });
+    new Audio(r.url).play();
+    toast(`${r.role} · ${shortVoice(r.voice)} · ${(r.ms / 1000).toFixed(1)}s`);
+  } catch (e) { toast(e.message); }
 }
 
 function castVoice(role) {
@@ -645,7 +679,8 @@ function renderQueue() {
   box.innerHTML = list.map((c, i) => {
     let status = '等待';
     if (job) {
-      if (i + 1 < job.index) status = '已完成';
+      if ((job.failures || []).includes(c.title)) status = '失败';
+      else if (i + 1 < job.index) status = '已完成';
       else if (i + 1 === job.index) status = job.status === 'running' ? '进行中' : job.status;
     }
     return `<div class="row"><div class="grow"><div class="title">${esc(c.title)}</div>
@@ -738,7 +773,33 @@ function renderJob() {
   }
   if (running) S._doneShown = false;
   renderQueue();
+  renderFailures();
   updateMini();
+}
+
+function renderFailures() {
+  const job = S.job;
+  const fails = (job && job.failures) || [];
+  const box = $('failBox');
+  if (!fails.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="section-title">失败 ${fails.length} 章</div>
+    <div class="card">${fails.map((n) => `<div class="row">
+      <div class="grow"><div class="title">${esc(n)}</div>
+      <div class="meta">网络超时或文本异常，可直接重试</div></div>
+      </div>`).join('')}
+      <div class="row"><button class="btn block" id="btnRetry">重试这 ${fails.length} 章</button></div>
+    </div>`;
+  $('btnRetry').onclick = async () => {
+    const files = fails
+      .map((n) => (S.chapters.find((c) => c.title === n) || {}).file)
+      .filter(Boolean);
+    if (!files.length) return toast('找不到对应章节，可能在书架里被替换了');
+    try {
+      await api('/api/job/batch', { method: 'POST',
+        body: { chapters: files, force: true, use_translated: true } });
+      toast('已重新排队');
+    } catch (e) { toast(e.message); }
+  };
 }
 
 function updateMini() {
@@ -833,6 +894,14 @@ function openSettings() {
         </div>
       </div>
 
+      <div class="section-title">诊断</div>
+      <div class="card">
+        <div class="row"><div class="grow"><div class="title">环境自检</div>
+          <div class="meta">ffmpeg / 依赖 / 引擎 / DNS</div></div>
+          <button class="btn small" data-diag>运行</button></div>
+        <div id="diagList"></div>
+      </div>
+
       <div style="padding:14px 16px">
         <button class="btn primary block" data-save-all>保存设置</button>
       </div>`;
@@ -865,6 +934,18 @@ function openSettings() {
       val('[data-llm-note]').textContent = r.ready ? `已保存，${r.note}` : `已保存，但 ${r.note}`;
       toast('大模型设置已保存');
     };
+    val('[data-diag]').onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = '检测中…';
+      const r = await api('/api/diagnose');
+      body.querySelector('#diagList').innerHTML = r.items.map((it) => {
+        const color = it.status === 'ok' ? '#34C759' : it.status === 'warn' ? '#FF9500' : '#FF3B30';
+        const mark = it.status === 'ok' ? '正常' : it.status === 'warn' ? '注意' : '失败';
+        return `<div class="row"><div class="grow"><div class="title" style="color:${color}">${esc(it.name)} · ${mark}</div>
+          <div class="meta">${esc(it.detail)}</div></div></div>`;
+      }).join('');
+      e.target.disabled = false; e.target.textContent = '运行';
+    };
+
     val('[data-save-all]').onclick = async () => {
       const engine = body.querySelector('[data-engine] .on').dataset.k;
       const r = await api('/api/settings', { method: 'POST', body: {

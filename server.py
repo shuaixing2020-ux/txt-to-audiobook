@@ -165,6 +165,21 @@ def save_cast(req: CastReq):
     return {"ok": True, "count": len(vm)}
 
 
+class MergeReq(BaseModel):
+    roles: list[str]
+
+
+@app.post("/api/cast/merge")
+def merge_roles(req: MergeReq):
+    """把剧本里有、配音表里没有的角色补进来"""
+    vm = studio.load_voice_map() or {}
+    before = len(vm)
+    studio.add_missing_roles(vm, req.roles)
+    if len(vm) > before:
+        studio.save_voice_map(vm)
+    return {"added": len(vm) - before, "cast": studio.voice_map_rows(vm)}
+
+
 @app.post("/api/cast/restyle")
 def restyle(req: CastReq):
     vm = studio.rows_to_voice_map(req.rows)
@@ -338,6 +353,47 @@ class PreviewReq(BaseModel):
     voice: str = "zh-CN-XiaoxiaoNeural"
     rate: str = "+0%"
     pitch: str = "+0Hz"
+
+
+class LineAudioReq(BaseModel):
+    chapter: str
+    index: int                 # 1 起
+    voice: str | None = None
+
+
+@app.post("/api/line/audio")
+def line_audio(req: LineAudioReq):
+    """单句重合成：只做这一句，用来校验改完的归属对不对"""
+    path = translate.translated_path(req.chapter)
+    if not os.path.exists(path):
+        raise HTTPException(400, "这一章还没有转译稿")
+    lines = [ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()]
+    if not (1 <= req.index <= len(lines)):
+        raise HTTPException(400, "行号越界")
+    role, _, text = lines[req.index - 1].partition(translate.DELIM)
+    role, text = role.strip(), text.strip()
+    if not text:
+        raise HTTPException(400, "这一行没有可朗读的正文")
+
+    vm = studio.load_voice_map() or {}
+    cfg = vm.get(role) or vm.get("旁白") or {}
+    voice = req.voice or cfg.get("voice") or "zh-CN-XiaoxiaoNeural"
+    rate, pitch = cfg.get("rate", "+0%"), cfg.get("pitch", "+0Hz")
+    try:
+        audio = studio.preview_voice(text, voice, rate, pitch)
+    except Exception as e:                         # noqa: BLE001
+        raise HTTPException(500, str(e)) from e
+    token = uuid.uuid4().hex
+    _PREVIEW[token] = audio
+    from scripts.audiobook_generator import mp3_duration_ms
+    return {"url": f"/api/audio/preview/{token}", "role": role, "text": text,
+            "voice": voice, "ms": mp3_duration_ms(audio)}
+
+
+@app.get("/api/diagnose")
+def diagnose(deep: bool = False):
+    from scripts import doctor
+    return {"items": doctor.run_checks(include_network=deep)}
 
 
 @app.post("/api/preview")

@@ -500,3 +500,13 @@ git diff            # 先看本地修改
 | 设置 | Sheet：引擎、并发、句间间隔、大模型（预设/地址/模型/Key 掩码/测试连接） |
 | 接口 | `/api/bootstrap` `/api/upload` `/api/split` `/api/cast/*` `/api/script` `/api/script/edit` `/api/translate` `/api/job/*` `/api/preview` `/api/audio/*` `/api/outputs` `/api/settings` `/api/llm/*` |
 | 验证 | 桌面 1440×900 与移动 390×844 全页面截图，console 0 报错；44 句气泡、9 个角色、35 章队列、7 个产物均正常渲染 |
+
+## 18. v3.1 变更清单（P0 补齐）
+
+| 类别 | 内容 |
+| --- | --- |
+| 单句重合成 | 新增 `POST /api/line/audio`：按行号只合成一句，返回音频与时长；校对页 ActionSheet 增加「重做这一句」，改完归属立刻能听 |
+| 角色补全 | 转译稿的角色名可能与配音表不一致（如「王静」vs「王静一」），合成会静默回退旁白音色。现在校对页顶部提示「N 个角色没有配音」，一键 `POST /api/cast/merge` 补全并各分独立音色 |
+| 失败可重试 | `SynthesisJob` 记录 `failures`，合成页列出失败章节并提供「重试这 N 章」（`force=true` 重排） |
+| 环境诊断 | `doctor.run_checks()` 抽成可复用函数，`GET /api/diagnose` 供设置页「环境自检」卡片使用（ffmpeg / 依赖 / 引擎 / DNS / 端口） |
+| 验证 | 单句重做返回 3.0s 音频且音色为王静一的 XiaochenNeural（补全前会退成旁白 Xiaoxiao）；补全 4 个角色后 9→13，提示消失；诊断 8 项全部正常 |

@@ -303,6 +303,34 @@ def rows_to_voice_map(rows) -> dict:
     return vm
 
 
+def add_missing_roles(vm: dict, names: list[str]) -> dict:
+    """把剧本里出现、但配音表里没有的角色补进来（各分一个没被占用的音色）
+
+    转译稿的角色名可能与当初识别的人物表不一致（比如「王静」vs「王静一」），
+    不补的话合成时会静默回退成旁白音色。
+    """
+    from scripts.analyze_characters import (FEMALE_VOICES, MALE_VOICES, _EXTRA_FEMALE,
+                                            _EXTRA_MALE, _apply_style, _voice_pool)
+
+    used = {cfg.get("voice") for cfg in vm.values() if isinstance(cfg, dict)}
+    pool = _voice_pool(FEMALE_VOICES, _EXTRA_FEMALE) + _voice_pool(MALE_VOICES, _EXTRA_MALE)
+    for name in names:
+        name = (name or "").strip()
+        if not name or name in vm:
+            continue
+        pick = next((v for v in pool if v[0] not in used), pool[0])
+        used.add(pick[0])
+        rate, pitch = _apply_style(pick[1], pick[2], "young", "calm")
+        vm[name] = {"voice": pick[0], "rate": rate, "pitch": pitch,
+                    "gender": "unknown", "age": "young", "emotion": "calm",
+                    "role": "supporting", "frequency": 0}
+    return vm
+
+
+def missing_roles(vm: dict, roles: list[str]) -> list[str]:
+    return [r for r in roles if r and r != "旁白" and r not in vm]
+
+
 def restyle_voice_map(vm: dict) -> dict:
     """按「年龄 + 情绪」重算语速/音调（以音色自带的预设为基准，可反复执行）"""
     presets = {}
@@ -653,6 +681,7 @@ class SynthesisJob:
         self.skip = 0
         self.fail = 0
         self.latest: str | None = None
+        self.failures: list[str] = []
         self.timings: list[dict] = []
         self.started_at = 0.0
         self.finished_at = 0.0
@@ -720,6 +749,7 @@ class SynthesisJob:
                 "skip": self.skip,
                 "fail": self.fail,
                 "latest": self.latest,
+                "failures": list(self.failures),
                 "timings": self.timings,
                 "elapsed": round((self.finished_at or time.time()) - self.started_at, 1)
                 if self.started_at else 0.0,
@@ -804,6 +834,7 @@ class SynthesisJob:
             except Exception as e:                 # noqa: BLE001
                 with self._lock:
                     self.fail += 1
+                    self.failures.append(name)
                     self.progress = i / self.total
                 self._log(f"[{i}/{self.total}] ❌ {name}：{str(e).replace(chr(10), ' ')[:160]}")
 
