@@ -103,7 +103,9 @@ def bootstrap():
     lib = studio.library_load()
     outputs = studio.list_outputs()
     s = studio.summary()
+    stale = {t["name"]: t["stale"] for t in studio.chapter_tasks(chapters, True, vm)} if vm else {}
     return {
+        "lan": bool(getattr(app.state, "lan", False)),
         "book": {"id": studio.current_book(),
                  "title": next((b["title"] for b in studio.list_books()
                                 if b["id"] == studio.current_book()), ""),
@@ -111,7 +113,9 @@ def bootstrap():
         "summary": s,
         "chapters": [
             {"file": fn, "title": os.path.splitext(fn)[0],
-             "chars": _chapter_chars(fn), "translated": os.path.exists(translate.translated_path(fn))}
+             "chars": _chapter_chars(fn),
+             "translated": os.path.exists(translate.translated_path(fn)),
+             "stale": stale.get(os.path.splitext(fn)[0], True)}
             for fn in chapters
         ],
         "cast": studio.voice_map_rows(vm) if vm else [],
@@ -375,6 +379,19 @@ def edit_line(req: LineEditReq):
 # ─────────────────────────────────────────────────────
 # 任务（合成 / 转译共用）
 # ─────────────────────────────────────────────────────
+class EstimateReq(BaseModel):
+    chapters: list[str]
+    use_translated: bool = True
+
+
+@app.post("/api/estimate")
+def estimate(req: EstimateReq):
+    vm = studio.load_voice_map() or {}
+    if not vm:
+        raise HTTPException(400, "先识别人物")
+    return studio.estimate_synthesis(req.chapters, vm, req.use_translated)
+
+
 class BatchReq(BaseModel):
     chapters: list[str]
     force: bool = False
@@ -387,7 +404,7 @@ def start_batch(req: BatchReq):
     if not vm:
         raise HTTPException(400, "先识别人物")
     try:
-        studio.start_job(studio.chapter_tasks(req.chapters, req.use_translated),
+        studio.start_job(studio.chapter_tasks(req.chapters, req.use_translated, vm),
                          vm, req.force, kind="batch")
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
@@ -673,4 +690,5 @@ if __name__ == "__main__":
         print("  ⚠️ 已监听所有网卡且没有登录，请只在可信网络里使用\n")
     else:
         print(f"  http://{host}:{port}\n")
+    app.state.lan = host in ("0.0.0.0", "::")
     uvicorn.run(app, host=host, port=port, log_level="warning")

@@ -60,7 +60,7 @@ python server.py         # → http://127.0.0.1:7860（iOS 风格界面）
 没有网络时用离线引擎：
 
 ```bash
-AUDIOBOOK_ENGINE=say python app.py
+AUDIOBOOK_ENGINE=say python server.py
 ```
 
 ---
@@ -70,6 +70,9 @@ AUDIOBOOK_ENGINE=say python app.py
 ```
 书架 → 角色 → 校对 → 合成 → 作品
 ```
+
+> 旧版的「导入与切章 / 人物与配音 / 文本转译 / 剧本校对 / 合成 / 产物库」六步，
+> 现在合并为五个 Tab：转译并入「校对」页顶部，产物库改名「作品」。
 
 - 桌面：左侧边栏 + 内容区（iPadOS 分栏）
 - 手机：底部 TabBar；长任务在其他 Tab 时底部有迷你进度条，点按回到合成页
@@ -96,7 +99,7 @@ AUDIOBOOK_ENGINE=say python app.py
 
 ## 大模型配置（可选）
 
-「二 · 人物与配音 → 🤖 大模型识别设置」里填服务商、地址、模型、API Key，点「测试连接」→「保存」。
+点右上角「设置」，在「大模型」一栏填服务商、地址、模型、API Key，点「测试连接」→「保存」。
 
 内置预设（任何 OpenAI 兼容接口都能用）：
 
@@ -120,8 +123,8 @@ AUDIOBOOK_ENGINE=say python app.py
 
 ```
 .
-├── server.py                  # 🆕 FastAPI 服务：把 studio.py 暴露成 HTTP 接口 + 托管前端
-├── web/                       # 🆕 前端（原生 HTML/CSS/JS，无构建）
+├── server.py                  # FastAPI 服务：把 studio.py 暴露成 HTTP 接口 + 托管前端
+├── web/                       # 前端（原生 HTML/CSS/JS，无构建；含 manifest 与 Service Worker）
 │   ├── index.html  app.css  app.js
 ├── app.py                     # 早期 Gradio 界面（保留）
 ├── scripts/
@@ -172,7 +175,8 @@ python -m scripts.test_pipeline   # 清洗 / 全链路 / say 引擎
 python -m scripts.test_llm        # 大模型识别（本地假服务器）
 ```
 
-全部离线运行，不消耗 API 额度。
+全部离线运行，不消耗 API 额度（21 个用例：解析 5 / 服务层 13 / 全链路 3 / 大模型 5，部分用例含多条断言）。
+GitHub Actions 每次 push 会自动跑这四个文件（`.github/workflows/tests.yml`），徽章在页面顶部。
 
 ---
 
@@ -184,15 +188,18 @@ python -m scripts.test_llm        # 大模型识别（本地假服务器）
 | 某个角色全程没声音 | `say` 同名音色（Reed/Flo）会命中非中文变体，本项目已用「中文（中国大陆）」全名调用 |
 | 角色表音色重复 | 点「识别人物」重分配，或手动改；旁白音色不会被角色占用 |
 | 转译很慢 | 大模型每章 3~8 秒属正常；只想要格式规整可切「本地规则」 |
-| 端口占用 | `GRADIO_SERVER_PORT=7861 python app.py` |
+| 端口占用 | `PORT=7861 python server.py`（换端口）；`lsof -ti:7860` 查占用进程 |
 
 ---
 
 ## 来源与致谢
 
 本项目基于 [yunieyuna/txt-to-audiobook](https://github.com/yunieyuna/txt-to-audiobook) 的初始版本做了大幅重构：
-重写解析器、重写人物识别、新增服务层与六步网页、并发合成、文本转译、角色库、任务控制等。
+重写解析器、重写人物识别、新增服务层与五 Tab 网页、并发合成、文本转译、角色库、任务控制等。
 上游仓库未声明开源许可证，如有异议请联系删除。
+
+> 许可证说明：上游没有 LICENSE 文件，严格意义上属于「保留所有权利」。本项目在其基础上做了大幅重构，
+> 但仍有部分模块源自上游。若要正式对外分发，建议先联系上游补一个许可证（如 MIT），或把受影响模块重写。
 
 ## 免责声明
 

@@ -830,7 +830,7 @@ def cb_start_batch(chapters, df, force, use_translated, engine, interval, worker
         return "⚠️ 配音表是空的：先「识别人物」或「读入默认配置」", {}, gr.update(active=False)
     studio.set_engine(engine, interval, workers)
     try:
-        studio.start_job(studio.chapter_tasks(chapters, bool(use_translated)),
+        studio.start_job(studio.chapter_tasks(chapters, bool(use_translated), vm),
                          vm, bool(force), kind="batch")
     except RuntimeError as e:                       # noqa: BLE001
         return f"⚠️ {e}", {}, gr.update(active=False)

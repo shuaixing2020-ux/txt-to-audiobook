@@ -843,6 +843,26 @@ $('btnTranslate').onclick = async () => {
 };
 
 /* ── 合成 ───────────────────────────────────────────── */
+async function loadEstimate() {
+  const list = S.chapters.filter((c) => S.selected.has(c.file));
+  if (!list.length || !S.cast.length) { $('estimateBox').innerHTML = ''; return; }
+  try {
+    const r = await api('/api/estimate', { method: 'POST',
+      body: { chapters: list.map((c) => c.file), use_translated: true } });
+    const min = Math.max(1, Math.round(r.est_seconds / 60));
+    $('estimateBox').innerHTML = `
+      <div class="section-title">本次会做什么</div>
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="title">${r.misses} 句要重合成 · ${r.cached} 句命中缓存</div>
+            <div class="meta">共 ${r.sentences} 句 · 预计 ${min} 分钟（${r.engine === 'say' ? '离线' : '在线'} ${r.workers} 并发）· 只有内容或音色变了的句子才会重做</div>
+          </div>
+        </div>
+      </div>`;
+  } catch (e) { $('estimateBox').innerHTML = ''; }
+}
+
 function renderQueue() {
   const list = S.chapters.filter((c) => S.selected.has(c.file));
   const box = $('queueList');
@@ -869,8 +889,10 @@ function renderQueue() {
     }
     return `<div class="row"><div class="grow"><div class="title">${esc(c.title)}</div>
       <div class="meta">${(c.chars || 0).toLocaleString()} 字${c.translated ? ' · 用转译稿' : ''}</div></div>
-      <span class="value">${esc(status)}</span></div>`;
+      <span class="value">${esc(status)}</span>
+      ${!job && c.stale ? '<span class="badge gray">内容已变更</span>' : ''}</div>`;
   }).join('');
+  loadEstimate();
 }
 
 $('btnStart').onclick = async () => {

@@ -196,6 +196,37 @@ def test_script_preview_flags():
         _restore(original)
 
 
+def test_output_fingerprint_detects_stale():
+    """成品指纹：脚本或音色变了要判为过期，否则会拿旧成品当最新"""
+    original = _isolate()
+    try:
+        _prep_chapters(1)
+        vm = {"旁白": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+0%", "pitch": "+0Hz",
+                       "gender": "female", "role": "narrator", "frequency": 0}}
+
+        task = studio.chapter_tasks(["001_t.txt"], True, vm)[0]
+        assert task["stale"] is True, "没有成品时应判为过期"
+
+        # 造一个成品 + 指纹
+        mp3 = os.path.join(studio.OUTPUT_DIR, "001_t.mp3")
+        with open(mp3, "wb") as f:
+            f.write(b"\x00" * 32)
+        studio.write_output_meta("001_t", task["path"], vm, 1.0)
+        assert studio.chapter_tasks(["001_t.txt"], True, vm)[0]["stale"] is False
+
+        # 脚本追加一句 → 过期
+        with open(task["path"], "a", encoding="utf-8") as f:
+            f.write("旁白｜又加了一句。\n")
+        assert studio.chapter_tasks(["001_t.txt"], True, vm)[0]["stale"] is True, "脚本变了应判过期"
+
+        # 重新写指纹后再改音色 → 也过期
+        studio.write_output_meta("001_t", task["path"], vm, 1.0)
+        vm2 = {"旁白": dict(vm["旁白"], voice="zh-CN-YunxiNeural")}
+        assert studio.chapter_tasks(["001_t.txt"], True, vm2)[0]["stale"] is True, "音色变了应判过期"
+    finally:
+        _restore(original)
+
+
 def test_multi_book_isolation():
     """每本书的章节 / 角色 / 产物互不干扰；删当前书会自动切到另一本"""
     root = tempfile.mkdtemp(prefix="books_")
@@ -521,6 +552,7 @@ if __name__ == "__main__":
         test_export_plan_only_existing,
         test_audit_rules_and_batch_skip,
         test_multi_book_isolation,
+        test_output_fingerprint_detects_stale,
         test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,

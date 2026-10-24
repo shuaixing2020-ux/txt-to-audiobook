@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -232,6 +233,10 @@ def ensure_books(force: bool = False) -> None:
         return
     set_current_book(current_book())
     _BOOKS_READY = True
+    try:
+        backfill_output_meta()
+    except Exception:                              # noqa: BLE001
+        pass
 
 
 def is_blank(v) -> bool:
@@ -1079,12 +1084,15 @@ class SynthesisJob:
             name = task["name"]
             out = os.path.join(OUTPUT_DIR, f"{name}.mp3")
 
-            if task["kind"] == "chapter" and os.path.exists(out) and not self.force:
+            if (task["kind"] == "chapter" and not self.force
+                    and is_up_to_date(name, task["path"], self.voice_map)):
                 with self._lock:
                     self.skip += 1
                     self.progress = i / self.total
-                self._log(f"[{i}/{self.total}] ⏭ {name} 已存在，跳过")
+                self._log(f"[{i}/{self.total}] ⏭ {name} 内容未变，跳过")
                 continue
+            if task["kind"] == "chapter" and os.path.exists(out):
+                self._log(f"[{i}/{self.total}] ↻ {name} 内容有更新，重新合成")
 
             self._skip.clear()
             self._log(f"[{i}/{self.total}] ▶ {name} 开始合成")
@@ -1099,6 +1107,7 @@ class SynthesisJob:
                     progress_cb=self._progress_cb,
                     control=self._control,
                 ))
+                write_output_meta(name, task["path"], self.voice_map, duration)
                 with self._lock:
                     self.ok += 1
                     self.latest = file
@@ -1159,7 +1168,75 @@ def current_job() -> SynthesisJob | None:
     return _CURRENT_JOB
 
 
-def chapter_tasks(chapters: list[str], use_translated: bool = True) -> list[dict]:
+def output_meta_path(name: str) -> str:
+    return os.path.join(OUTPUT_DIR, f"{name}.json")
+
+
+def script_fingerprint(path: str, voice_map: dict) -> str:
+    """脚本内容 + 音色配置 + 引擎 → 指纹；任一项变了成品就算过期"""
+    try:
+        text = read_text(path)
+    except OSError:
+        return ""
+    cast = {k: [v.get("voice"), v.get("rate"), v.get("pitch")]
+            for k, v in (voice_map or {}).items() if isinstance(v, dict)}
+    raw = (text + "|" + json.dumps(cast, ensure_ascii=False, sort_keys=True)
+           + "|" + gen._ENGINE).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def is_up_to_date(name: str, path: str, voice_map: dict) -> bool:
+    """成品存在且指纹一致才算「不用重做」；老成品没有 meta 视为过期"""
+    mp3 = os.path.join(OUTPUT_DIR, f"{name}.mp3")
+    meta_path = output_meta_path(name)
+    if not os.path.exists(mp3) or not os.path.exists(meta_path):
+        return False
+    meta = _read_json(meta_path, {}) or {}
+    return meta.get("fingerprint") == script_fingerprint(path, voice_map)
+
+
+def write_output_meta(name: str, path: str, voice_map: dict, duration: float) -> None:
+    _write_json(output_meta_path(name), {
+        "fingerprint": script_fingerprint(path, voice_map),
+        "engine": gen._ENGINE,
+        "duration": round(duration, 1),
+        "at": time.strftime("%Y-%m-%d %H:%M"),
+    })
+
+
+def backfill_output_meta(voice_map: dict | None = None) -> int:
+    """给「指纹功能上线前」的成品补一份 meta
+
+    只补能证明是新的：mp3 比脚本和 voice_map 都新，才认为它反映当前配置。
+    否则留空 → 会被判为「内容已变更」，下次合成时重做（此时多数句子命中缓存，很快）。
+    """
+    vm = voice_map if voice_map is not None else (load_voice_map() or {})
+    if not vm or not os.path.isdir(OUTPUT_DIR):
+        return 0
+    n = 0
+    vm_mtime = os.path.getmtime(VOICE_MAP_PATH) if os.path.exists(VOICE_MAP_PATH) else 0
+    for fn in os.listdir(OUTPUT_DIR):
+        if not fn.endswith(".mp3"):
+            continue
+        name = fn[:-4]
+        mp3 = os.path.join(OUTPUT_DIR, fn)
+        if os.path.exists(output_meta_path(name)):
+            continue
+        chapter = f"{name}.txt"
+        path = translate.translated_path(chapter)
+        if not os.path.exists(path):
+            path = os.path.join(SAMPLES_DIR, chapter)
+        if not os.path.exists(path):
+            continue
+        mp3_mtime = os.path.getmtime(mp3)
+        if mp3_mtime >= os.path.getmtime(path) and mp3_mtime >= vm_mtime:
+            write_output_meta(name, path, vm, gen.mp3_duration_ms(mp3) / 1000.0)
+            n += 1
+    return n
+
+
+def chapter_tasks(chapters: list[str], use_translated: bool = True,
+                  voice_map: dict | None = None) -> list[dict]:
     """章节 → 任务。转译稿存在且允许时优先用它（格式更规整，归属更准）"""
     tasks = []
     for fn in chapters:
@@ -1169,11 +1246,13 @@ def chapter_tasks(chapters: list[str], use_translated: bool = True) -> list[dict
             tp = translate.translated_path(fn)
             if os.path.exists(tp):
                 path = tp
+        name = os.path.splitext(fn)[0]
         tasks.append({
             "kind": "chapter",
-            "name": os.path.splitext(fn)[0],
+            "name": name,
             "path": path,
             "translated": path != raw,
+            "stale": bool(voice_map) and not is_up_to_date(name, path, voice_map),
         })
     return tasks
 
@@ -1303,6 +1382,46 @@ def start_translate_job(chapters: list[str], voice_map: dict,
             raise RuntimeError("已有任务在跑，请先停止它")
         _CURRENT_JOB = TranslateJob(chapters, voice_map, mode).start()
         return _CURRENT_JOB
+
+
+# ─────────────────────────────────────────────────────
+# 合成预估：按缓存命中情况算出「真正要重做几句」
+# ─────────────────────────────────────────────────────
+def estimate_synthesis(chapters: list[str], voice_map: dict,
+                       use_translated: bool = True) -> dict:
+    """逐句比对缓存，算出实际需要调用 TTS 的句子数
+
+    缓存键 = 引擎|文本|音色|语速|音调，所以改一个角色的音色只会让他的句子失效，
+    其余句子命中缓存直接复制。这里把这个「增量」量化出来给界面显示。
+    """
+    total = misses = 0
+    per_chapter = []
+    for task in chapter_tasks(chapters, use_translated):
+        try:
+            text = read_text(task["path"])
+        except OSError:
+            continue
+        script = parse_novel_to_script(text, voice_map)
+        ch_total = ch_miss = 0
+        for line in script:
+            cfg = voice_map.get(line["role"]) or voice_map.get("旁白") or {}
+            for chunk in gen._clean_text(gen.apply_pronounce(line["text"])):
+                ch_total += 1
+                key = gen._cache_key(chunk, cfg.get("voice", DEFAULT_VOICE),
+                                     cfg.get("rate", "+0%"), cfg.get("pitch", "+0Hz"))
+                if not os.path.exists(os.path.join(gen.CACHE_DIR, key + ".mp3")):
+                    ch_miss += 1
+        total += ch_total
+        misses += ch_miss
+        per_chapter.append({"name": task["name"], "sentences": ch_total, "misses": ch_miss})
+
+    # 实测：离线 4 并发约 1.8s/句；在线受网络影响，按 2.5s/句估
+    per_sentence = 1.8 if gen._ENGINE == "say" else 2.5
+    workers = max(1, gen._WORKERS) / 4.0
+    est = int(misses * per_sentence / workers)
+    return {"sentences": total, "misses": misses, "cached": total - misses,
+            "est_seconds": est, "chapters": per_chapter,
+            "engine": gen._ENGINE, "workers": gen._WORKERS}
 
 
 # ─────────────────────────────────────────────────────
