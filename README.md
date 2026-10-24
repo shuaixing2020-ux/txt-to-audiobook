@@ -22,6 +22,7 @@
 
 | 环节 | 能力 |
 | --- | --- |
+| 多本书 | 书架可放多本，各自独立的章节 / 角色表 / 转译稿 / 产物；删书只移到 `books/.trash/` |
 | 切章 | 按「第 X 章 / 序章 / 楔子」正则切分，UTF-8 / GBK 自动识别，超长章再切 |
 | 识别人物 | 本地规则（jieba + 说话动词 + 代词统计）或**大模型**（任何 OpenAI 兼容接口）；输出名字/性别/**年龄**/**情绪**/别名 |
 | 文本转译 | 把整章改写成 `角色｜台词` 标准脚本：一行一句、角色明示、自动去水印；规则版秒级、大模型版逐章 |
@@ -126,11 +127,10 @@ AUDIOBOOK_ENGINE=say python app.py
 │   ├── tts_local.py           # macOS say 离线引擎
 │   ├── split.py / batch.py / doctor.py
 │   └── test_*.py              # 回归测试（不联网、不花钱）
-├── data/                      # 放小说 txt（不入库）
-├── samples/                   # 切好的章节（不入库）
-├── translated/                # 转译稿（不入库）
-├── output/                    # 生成的 MP3（不入库）
-└── config/                    # 本机配置，含 Key（不入库）
+├── books/<书名>/              # 每本书独立：samples / translated / output / voice_map.json
+├── data/                      # 上传的原始 txt（不入库）
+├── config/                    # 全局配置：llm.json / character_library.json / pronounce.json（不入库）
+└── books/.trash/              # 删除的书移到这里，不会真删
 ```
 
 ---

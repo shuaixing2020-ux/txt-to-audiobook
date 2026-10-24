@@ -114,6 +114,7 @@ async function boot() {
   S.chapters = data.chapters || [];
   S.selected = new Set(S.chapters.map((c) => c.file));
   applySettings(data.settings, data.llm);
+  renderBooks();
   renderBook();
   renderCast();
   renderWorks(data.outputs);
@@ -136,6 +137,93 @@ function applySettings(st, llm) {
 }
 
 /* ── 书架 ───────────────────────────────────────────── */
+function renderBooks() {
+  const info = S.boot?.book || { books: [], id: null, title: '' };
+  const books = info.books || [];
+  const cur = books.find((b) => b.id === info.id) || books[0];
+  $('curBookTitle').textContent = cur ? cur.title : '还没有书';
+  $('curBookMeta').textContent = cur
+    ? `${cur.chapters} 章 · ${cur.outputs} 个产物${cur.author ? ' · ' + cur.author : ''}`
+    : '点「新建」开始';
+  $('bookSelect').innerHTML = books.map((b) =>
+    `<option value="${esc(b.id)}" ${cur && b.id === cur.id ? 'selected' : ''}>${esc(b.title)}</option>`).join('');
+}
+
+$('bookSelect').onchange = async (e) => {
+  try {
+    await api('/api/books/select', { method: 'POST', body: { id: e.target.value } });
+    await reloadData();
+    toast('已切换书籍');
+  } catch (err) { toast(err.message); }
+};
+
+$('btnNewBook').onclick = () => {
+  openSheet('新建书籍', (host) => {
+    const box = document.createElement('div');
+    box.innerHTML = `
+      <div class="field"><label>书名</label><input type="text" id="nbTitle" placeholder="例如：斩世刀"></div>
+      <div class="field"><label>作者</label><input type="text" id="nbAuthor" placeholder="可留空"></div>
+      <div class="hint">新书有独立的章节、角色表、转译稿和产物，互不干扰。</div>
+      <div style="padding:12px 16px"><button class="btn primary block" id="nbOk">创建</button></div>`;
+    host.appendChild(box);
+    box.querySelector('#nbOk').onclick = async () => {
+      const title = box.querySelector('#nbTitle').value.trim();
+      if (!title) return toast('书名不能为空');
+      try {
+        await api('/api/books', { method: 'POST',
+          body: { title, author: box.querySelector('#nbAuthor').value.trim() } });
+        closeSheet(); await reloadData(); setTab('shelf'); toast(`已创建《${title}》`);
+      } catch (e) { toast(e.message); }
+    };
+  });
+};
+
+$('btnBookMore').onclick = () => {
+  const info = S.boot?.book || {};
+  const cur = (info.books || []).find((b) => b.id === info.id);
+  if (!cur) return toast('还没有书');
+  actionSheet(cur.title, [
+    { label: '重命名', onClick: () => {
+      openSheet('重命名书籍', (host) => {
+        const box = document.createElement('div');
+        box.innerHTML = `
+          <div class="field"><label>书名</label><input type="text" id="rbTitle" value="${esc(cur.title)}"></div>
+          <div class="field"><label>作者</label><input type="text" id="rbAuthor" value="${esc(cur.author || '')}"></div>
+          <div style="padding:12px 16px"><button class="btn primary block" id="rbOk">保存</button></div>`;
+        host.appendChild(box);
+        box.querySelector('#rbOk').onclick = async () => {
+          await api('/api/books/rename', { method: 'POST', body: {
+            id: cur.id, title: box.querySelector('#rbTitle').value.trim(),
+            author: box.querySelector('#rbAuthor').value.trim() } });
+          closeSheet(); await reloadData(); toast('已保存');
+        };
+      });
+    } },
+    { label: '删除（移到回收站）', destructive: true, onClick: async () => {
+      try {
+        await api('/api/books/' + encodeURIComponent(cur.id), { method: 'DELETE' });
+        await reloadData(); toast('已移到 books/.trash/');
+      } catch (e) { toast(e.message); }
+    } },
+  ], '删除只是移到 books/.trash/，不会真的丢');
+};
+
+async function reloadData() {
+  const data = await api('/api/bootstrap');
+  S.boot = data;
+  S.cast = data.cast || [];
+  S.chapters = data.chapters || [];
+  S.selected = new Set(S.chapters.map((c) => c.file));
+  applySettings(data.settings, data.llm);
+  renderBooks();
+  renderBook();
+  renderCast();
+  renderChapters(S.chapters);
+  renderWorks(data.outputs);
+  S.outputs = data.outputs;
+  loadChapterOptions();
+}
+
 function renderBook() {
   const b = S.book;
   const n = (S.chapters || []).length;

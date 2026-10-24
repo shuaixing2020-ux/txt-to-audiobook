@@ -23,18 +23,32 @@ def _make_book(n_chapters: int = 3, encoding: str = "gb18030") -> str:
 
 
 def _isolate() -> dict:
-    """把三个目录指到临时目录，返回原值以便还原"""
-    original = {k: getattr(studio, k) for k in ("SAMPLES_DIR", "OUTPUT_DIR", "CONFIG_DIR", "VOICE_MAP_PATH")}
+    """把目录指到临时目录，返回原值以便还原
+
+    连 BOOKS_DIR / CURRENT_BOOK_PATH / translate.TRANSLATED_DIR 一起换掉：
+    只要漏一个，ensure_dirs() 里的 ensure_books() 就会把路径改回真实书籍，
+    测试就会动到用户的真实数据。
+    """
+    keys = ("SAMPLES_DIR", "OUTPUT_DIR", "CONFIG_DIR", "VOICE_MAP_PATH",
+            "BOOKS_DIR", "CURRENT_BOOK_PATH")
+    original = {k: getattr(studio, k) for k in keys}
+    original["_TRANSLATED"] = studio.translate.TRANSLATED_DIR
     root = tempfile.mkdtemp(prefix="studio_root_")
+    studio.BOOKS_DIR = os.path.join(root, "books")
+    studio.CURRENT_BOOK_PATH = os.path.join(root, "config", "current_book.json")
     studio.SAMPLES_DIR = os.path.join(root, "samples")
     studio.OUTPUT_DIR = os.path.join(root, "output")
     studio.CONFIG_DIR = os.path.join(root, "config")
     studio.VOICE_MAP_PATH = os.path.join(studio.CONFIG_DIR, "voice_map.json")
-    studio.ensure_dirs()
+    studio.translate.TRANSLATED_DIR = os.path.join(root, "translated")
+    for d in (studio.SAMPLES_DIR, studio.OUTPUT_DIR, studio.CONFIG_DIR,
+              studio.translate.TRANSLATED_DIR):
+        os.makedirs(d, exist_ok=True)
     return original
 
 
 def _restore(original: dict) -> None:
+    studio.translate.TRANSLATED_DIR = original.pop("_TRANSLATED", "")
     for k, v in original.items():
         setattr(studio, k, v)
 
@@ -180,6 +194,45 @@ def test_script_preview_flags():
         assert p["stats"]["warn"] >= 2, p["stats"]
     finally:
         _restore(original)
+
+
+def test_multi_book_isolation():
+    """每本书的章节 / 角色 / 产物互不干扰；删当前书会自动切到另一本"""
+    root = tempfile.mkdtemp(prefix="books_")
+    old = (studio.BOOKS_DIR, studio.CURRENT_BOOK_PATH,
+           studio.SAMPLES_DIR, studio.OUTPUT_DIR, studio.VOICE_MAP_PATH,
+           studio.translate.TRANSLATED_DIR)
+    try:
+        studio.BOOKS_DIR = os.path.join(root, "books")
+        studio.CURRENT_BOOK_PATH = os.path.join(root, "current.json")
+        os.makedirs(studio.BOOKS_DIR, exist_ok=True)
+
+        a = studio.create_book("甲书")
+        studio.set_current_book(a)
+        with open(os.path.join(studio.SAMPLES_DIR, "001_a.txt"), "w", encoding="utf-8") as f:
+            f.write("旁白｜甲书的一章。\n")
+        studio.save_voice_map({"旁白": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+0%",
+                                        "pitch": "+0Hz", "gender": "female",
+                                        "role": "narrator", "frequency": 0}})
+        assert len(studio.list_chapters()) == 1
+        assert studio.load_voice_map()
+
+        b = studio.create_book("乙书")
+        studio.set_current_book(b)
+        assert studio.list_chapters() == [], "乙书不该看到甲书的章节"
+        assert not studio.load_voice_map(), "乙书不该看到甲书的角色"
+
+        studio.set_current_book(a)
+        assert len(studio.list_chapters()) == 1, "切回甲书应恢复"
+
+        studio.delete_book(a)                       # 删当前书 → 自动切到乙书
+        assert studio.current_book() == b, studio.current_book()
+        assert not os.path.exists(studio.book_dir(a))
+        assert os.path.isdir(os.path.join(studio.BOOKS_DIR, ".trash")), "删除应进回收站"
+    finally:
+        (studio.BOOKS_DIR, studio.CURRENT_BOOK_PATH, studio.SAMPLES_DIR,
+         studio.OUTPUT_DIR, studio.VOICE_MAP_PATH, studio.translate.TRANSLATED_DIR) = old
+        studio.ensure_books()
 
 
 def test_audit_rules_and_batch_skip():
@@ -467,6 +520,7 @@ if __name__ == "__main__":
         test_pronounce_longest_first,
         test_export_plan_only_existing,
         test_audit_rules_and_batch_skip,
+        test_multi_book_isolation,
         test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,

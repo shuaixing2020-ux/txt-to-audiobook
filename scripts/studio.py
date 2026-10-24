@@ -40,9 +40,14 @@ from scripts.split import (                                         # noqa: E402
     DEFAULT_PATTERN, read_text, safe_name, split_chapters,
 )
 
+BOOKS_DIR = os.path.join(ROOT, "books")
+CONFIG_DIR = os.path.join(ROOT, "config")
+CURRENT_BOOK_PATH = os.path.join(CONFIG_DIR, "current_book.json")
+
+# 下面三个是「当前这本书」的目录，由 set_current_book() 动态改写；
+# 所有函数都在调用时才读它们，所以换书不需要重启进程。
 SAMPLES_DIR = os.path.join(ROOT, "samples")
 OUTPUT_DIR = os.path.join(ROOT, "output")
-CONFIG_DIR = os.path.join(ROOT, "config")
 VOICE_MAP_PATH = os.path.join(CONFIG_DIR, "voice_map.json")
 LIBRARY_PATH = os.path.join(CONFIG_DIR, "character_library.json")
 PRONOUNCE_PATH = os.path.join(CONFIG_DIR, "pronounce.json")
@@ -65,8 +70,168 @@ CHAPTER_TABLE_HEADERS = ["序号", "章节", "字数", "文件名", "状态"]
 # 小工具
 # ─────────────────────────────────────────────────────
 def ensure_dirs() -> None:
+    ensure_books()
     for d in (SAMPLES_DIR, OUTPUT_DIR, CONFIG_DIR):
         os.makedirs(d, exist_ok=True)
+
+
+# ─────────────────────────────────────────────────────
+# 多本书：books/<id>/{samples,translated,output,voice_map.json,meta.json}
+# ─────────────────────────────────────────────────────
+def _read_json(path: str, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _write_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _slug(title: str) -> str:
+    base = re.sub(r"[^\w\u4e00-\u9fa5]+", "-", (title or "book").strip()).strip("-")
+    return (base or "book")[:24]
+
+
+def book_dir(book_id: str) -> str:
+    return os.path.join(BOOKS_DIR, book_id)
+
+
+def list_books() -> list[dict]:
+    if not os.path.isdir(BOOKS_DIR):
+        return []
+    out = []
+    for bid in sorted(os.listdir(BOOKS_DIR)):
+        d = book_dir(bid)
+        if bid.startswith(".") or not os.path.isdir(d):
+            continue
+        meta = _read_json(os.path.join(d, "meta.json"), {})
+        smp = os.path.join(d, "samples")
+        outp = os.path.join(d, "output")
+        out.append({
+            "id": bid,
+            "title": meta.get("title") or bid,
+            "author": meta.get("author", ""),
+            "created": meta.get("created", ""),
+            "chapters": len([f for f in os.listdir(smp) if f.endswith(".txt")])
+            if os.path.isdir(smp) else 0,
+            "outputs": len([f for f in os.listdir(outp)
+                            if f.lower().endswith((".mp3", ".m4b"))])
+            if os.path.isdir(outp) else 0,
+        })
+    return out
+
+
+def create_book(title: str, author: str = "") -> str:
+    """新建一本书；目录延迟创建（迁移时才能直接 rename）"""
+    os.makedirs(BOOKS_DIR, exist_ok=True)
+    base = _slug(title)
+    bid, n = base, 2
+    while os.path.exists(book_dir(bid)):
+        bid = f"{base}-{n}"
+        n += 1
+    os.makedirs(book_dir(bid), exist_ok=True)
+    _write_json(os.path.join(book_dir(bid), "meta.json"), {
+        "title": title or bid, "author": author,
+        "created": time.strftime("%Y-%m-%d %H:%M"),
+    })
+    return bid
+
+
+def current_book() -> str:
+    """当前书 id；没有就建一本默认的"""
+    data = _read_json(CURRENT_BOOK_PATH, {})
+    bid = data.get("id") if isinstance(data, dict) else None
+    if bid and os.path.isdir(book_dir(bid)):
+        return bid
+    books = list_books()
+    return books[0]["id"] if books else create_book("默认书籍")
+
+
+def set_current_book(book_id: str) -> dict:
+    """切换当前书：改写模块级目录变量 + translate 的转译目录"""
+    global SAMPLES_DIR, OUTPUT_DIR, VOICE_MAP_PATH
+    d = book_dir(book_id)
+    if not os.path.isdir(d):
+        raise FileNotFoundError(f"书不存在：{book_id}")
+    SAMPLES_DIR = os.path.join(d, "samples")
+    OUTPUT_DIR = os.path.join(d, "output")
+    VOICE_MAP_PATH = os.path.join(d, "voice_map.json")
+    translate.TRANSLATED_DIR = os.path.join(d, "translated")
+    for sub in (SAMPLES_DIR, OUTPUT_DIR, translate.TRANSLATED_DIR):
+        os.makedirs(sub, exist_ok=True)
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    _write_json(CURRENT_BOOK_PATH, {"id": book_id, "at": time.strftime("%Y-%m-%d %H:%M")})
+    return {"id": book_id, **(_read_json(os.path.join(d, "meta.json"), {}) or {})}
+
+
+def rename_book(book_id: str, title: str, author: str = "") -> None:
+    meta = _read_json(os.path.join(book_dir(book_id), "meta.json"), {}) or {}
+    meta["title"] = title.strip() or meta.get("title") or book_id
+    if author is not None:
+        meta["author"] = author.strip()
+    _write_json(os.path.join(book_dir(book_id), "meta.json"), meta)
+
+
+def delete_book(book_id: str) -> str:
+    """不真删：整体移到 books/.trash/，随时可捞回来
+
+    删的是当前这本时，先自动切到另一本（只剩一本则拒绝）。
+    """
+    if book_id == current_book():
+        others = [b["id"] for b in list_books() if b["id"] != book_id]
+        if not others:
+            raise RuntimeError("这是唯一的一本书，删了就没得用了")
+        set_current_book(others[0])
+    trash = os.path.join(BOOKS_DIR, ".trash")
+    os.makedirs(trash, exist_ok=True)
+    dst = os.path.join(trash, f"{book_id}-{time.strftime('%Y%m%d-%H%M%S')}")
+    shutil.move(book_dir(book_id), dst)
+    return dst
+
+
+_BOOKS_READY = False
+
+
+def ensure_books(force: bool = False) -> None:
+    """首次运行：把旧版单书目录迁进 books/<id>/；之后只做一次恢复
+
+    幂等很重要：ensure_dirs() 会被到处调用，如果每次都 set_current_book，
+    测试里临时改过的目录会被覆盖回真实书籍目录。
+    """
+    global _BOOKS_READY
+    if _BOOKS_READY and not force:
+        return
+    os.makedirs(BOOKS_DIR, exist_ok=True)
+    if not list_books():
+        legacy = {"samples": os.path.join(ROOT, "samples"),
+                  "translated": os.path.join(ROOT, "translated"),
+                  "output": os.path.join(ROOT, "output")}
+        has_legacy = any(os.path.isdir(p) and os.listdir(p) for p in legacy.values())
+        if has_legacy:
+            bid = create_book("默认书籍")
+            for sub, src in legacy.items():
+                dst = os.path.join(book_dir(bid), sub)
+                if os.path.isdir(src) and not os.path.exists(dst):
+                    try:
+                        os.rename(src, dst)          # 同盘，瞬间完成
+                    except OSError:
+                        shutil.move(src, dst)
+            old_vm = os.path.join(CONFIG_DIR, "voice_map.json")
+            if os.path.exists(old_vm):
+                shutil.move(old_vm, os.path.join(book_dir(bid), "voice_map.json"))
+            set_current_book(bid)
+            _BOOKS_READY = True
+            return
+        set_current_book(create_book("默认书籍"))
+        _BOOKS_READY = True
+        return
+    set_current_book(current_book())
+    _BOOKS_READY = True
 
 
 def is_blank(v) -> bool:

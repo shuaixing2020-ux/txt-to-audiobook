@@ -48,6 +48,54 @@ _PREVIEW: dict[str, str] = {}
 # ─────────────────────────────────────────────────────
 # 基础状态
 # ─────────────────────────────────────────────────────
+@app.get("/api/books")
+def books():
+    return {"books": studio.list_books(), "current": studio.current_book()}
+
+
+class BookReq(BaseModel):
+    title: str = ""
+    author: str = ""
+
+
+@app.post("/api/books")
+def create_book(req: BookReq):
+    if not req.title.strip():
+        raise HTTPException(400, "书名不能为空")
+    bid = studio.create_book(req.title.strip(), req.author.strip())
+    studio.set_current_book(bid)
+    return {"id": bid, "books": studio.list_books()}
+
+
+class BookSelectReq(BaseModel):
+    id: str
+
+
+@app.post("/api/books/select")
+def select_book(req: BookSelectReq):
+    try:
+        studio.set_current_book(req.id)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    return {"id": req.id}
+
+
+@app.post("/api/books/rename")
+def rename_book(req: dict):
+    bid = req.get("id") or studio.current_book()
+    studio.rename_book(bid, req.get("title", ""), req.get("author", ""))
+    return {"books": studio.list_books()}
+
+
+@app.delete("/api/books/{book_id}")
+def delete_book(book_id: str):
+    try:
+        dst = studio.delete_book(book_id)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"moved_to": dst, "books": studio.list_books()}
+
+
 @app.get("/api/bootstrap")
 def bootstrap():
     chapters = studio.list_chapters()
@@ -56,6 +104,10 @@ def bootstrap():
     outputs = studio.list_outputs()
     s = studio.summary()
     return {
+        "book": {"id": studio.current_book(),
+                 "title": next((b["title"] for b in studio.list_books()
+                                if b["id"] == studio.current_book()), ""),
+                 "books": studio.list_books()},
         "summary": s,
         "chapters": [
             {"file": fn, "title": os.path.splitext(fn)[0],

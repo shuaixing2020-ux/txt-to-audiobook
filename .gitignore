@@ -6,6 +6,7 @@ venv/
 data/*.txt
 samples/
 translated/
+books/
 
 # 生成的音频与产物
 output/

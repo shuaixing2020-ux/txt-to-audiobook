@@ -549,3 +549,15 @@ git diff            # 先看本地修改
 | 重命名 | `POST /api/outputs/rename`：自动补扩展名、过滤文件系统非法字符、同名冲突返回 409 |
 | 兼容 | 播放器占位会挤压内容区（`body.has-player`），移动端自动叠在 TabBar 之上，与迷你进度条错开 |
 | 修 bug | 播放按钮最初用 `.pbtn.main`，撞上布局容器 `.main { flex:1; padding }`，按钮被拉成 720×200 的蓝块 → 改名 `.pbtn.play` |
+
+## 23. v3.6 变更清单（多本书管理）
+
+| 类别 | 内容 |
+| --- | --- |
+| 目录结构 | `samples/ translated/ output/ config/voice_map.json` → `books/<书名>/` 下各一份；全局配置（llm / 角色库 / 发音词典）仍放 `config/` |
+| 切换机制 | `set_current_book()` 动态改写 `SAMPLES_DIR / OUTPUT_DIR / VOICE_MAP_PATH / translate.TRANSLATED_DIR` 四个模块变量，换书不用重启 |
+| 自动迁移 | 首次启动检测到旧的单书目录，`os.rename` 整体搬进 `books/默认书籍/`（同盘瞬间完成），voice_map 一起搬 |
+| 界面 | 书架顶部书籍选择器 + 新建 + 更多（重命名 / 删除）；新建的书 0 章 0 角色，与旧书完全隔离 |
+| 安全 | 删除只是移到 `books/.trash/<书名>-时间戳/`；删当前书会自动切到另一本，只剩一本则拒绝 |
+| 踩坑 | ①`ensure_dirs()` 里的 `ensure_books()` 每次都 `set_current_book`，把测试临时改的目录覆盖回真实书 → 加 `_BOOKS_READY` 幂等标记；②测试的 `_isolate()` 漏了 `BOOKS_DIR/CURRENT_BOOK_PATH`，导致测试把真实书的 35 章移进了 `.stale`，已恢复并从 `.stale` 归位，`_isolate()` 现在把这几个全局一起换掉 |
+| 测试 | `test_studio` 20→21 例（两本书互相看不到对方章节/角色、删当前书自动切换、删除进回收站） |
