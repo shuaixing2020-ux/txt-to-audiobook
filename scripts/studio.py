@@ -758,7 +758,10 @@ def audit_chapter(chapter: str) -> dict:
 
 
 def skip_lines(chapter: str, indexes: list[int]) -> dict:
-    """批量设为不朗读：从大到小删，保证行号不错位"""
+    """批量设为不朗读：从大到小删，保证行号不错位
+
+    restore 里带上原始行号 [[行号, 内容], ...]（升序），撤销时按原位插回。
+    """
     path = translate.translated_path(chapter)
     if not os.path.exists(path):
         raise FileNotFoundError("这一章还没有转译稿")
@@ -766,9 +769,26 @@ def skip_lines(chapter: str, indexes: list[int]) -> dict:
     removed = []
     for i in sorted(set(indexes), reverse=True):
         if 1 <= i <= len(lines):
-            removed.append(lines.pop(i - 1))
+            removed.append([i, lines.pop(i - 1)])
     translate.save_translated(chapter, lines)
     return {"removed": len(removed), "restore": removed[::-1]}
+
+
+def restore_lines(chapter: str, items: list) -> dict:
+    """撤销「设为不朗读」：按原始行号从前往后插回"""
+    path = translate.translated_path(chapter)
+    if not os.path.exists(path):
+        raise FileNotFoundError("这一章还没有转译稿")
+    lines = [ln for ln in open(path, encoding="utf-8").read().splitlines() if ln.strip()]
+    pairs = []
+    for it in items or []:
+        if isinstance(it, (list, tuple)) and len(it) == 2:
+            pairs.append((int(it[0]), str(it[1])))
+    for idx, text in sorted(pairs):
+        pos = max(0, min(len(lines), idx - 1))
+        lines.insert(pos, text)
+    translate.save_translated(chapter, lines)
+    return {"restored": len(pairs)}
 
 
 def save_voice_map(vm: dict) -> str:

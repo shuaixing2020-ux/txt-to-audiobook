@@ -312,6 +312,19 @@ class SkipReq(BaseModel):
     indexes: list[int]
 
 
+class RestoreReq(BaseModel):
+    chapter: str
+    items: list
+
+
+@app.post("/api/script/restore")
+def restore_lines(req: RestoreReq):
+    try:
+        return studio.restore_lines(req.chapter, req.items)
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/script/skip")
 def skip_lines(req: SkipReq):
     try:
@@ -369,10 +382,10 @@ def edit_line(req: LineEditReq):
     if req.action == "role":
         if not req.value:
             raise HTTPException(400, "缺少角色名")
-        _, _, body = old.partition(translate.DELIM)
+        old_role, _, body = old.partition(translate.DELIM)
         lines[idx] = f"{req.value}{translate.DELIM}{body}"
         translate.save_translated(req.chapter, lines)
-        return {"ok": True, "old": old}
+        return {"ok": True, "old": old, "old_role": old_role}
     raise HTTPException(400, "不认识的操作")
 
 

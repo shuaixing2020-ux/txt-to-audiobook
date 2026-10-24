@@ -291,6 +291,20 @@ body.has-player .mini-bar { bottom: 112px; }
   body.has-player .mini-bar { bottom: calc(160px + env(safe-area-inset-bottom)); }
 }
 
+/* ── 局域网警示条 ─────────────────────────────────────── */
+.lan-banner {
+  display: none; position: fixed; top: 0; left: var(--sidebar-w); right: 0; z-index: 38;
+  padding: 7px 16px; font-size: 12px; line-height: 1.5; text-align: center;
+  background: rgba(255,149,0,.14); color: #8A4B00;
+  border-bottom: .5px solid rgba(255,149,0,.35);
+  backdrop-filter: blur(12px);
+}
+.lan-banner.on { display: block; }
+body.has-lan .main { padding-top: 54px; }
+@media (max-width: 900px) {
+  .lan-banner { left: 0; }
+}
+
 /* ── 空状态 ───────────────────────────────────────────── */
 .empty { text-align: center; padding: 46px 20px; color: var(--label-2); }
 .empty .big { font-size: 17px; color: var(--label); margin-bottom: 6px; }

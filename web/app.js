@@ -41,18 +41,33 @@ function buildNav() {
     b.onclick = () => setTab(b.dataset.tab));
 }
 
-function setTab(name) {
+function applyPendingScroll() {
+  if (!S.pendingScroll) return;
+  const el = $('main');
+  el.scrollTop = S.pendingScroll;
+  if (Math.abs(el.scrollTop - S.pendingScroll) < 4) S.pendingScroll = 0;  // 真滚到位了才清
+}
+
+function setTab(name, opts = {}) {
   if (name === 'settings') { openSettings(); return; }
+  if (S.tab && S.tab !== name) {                 // 离开时记住滚动位置
+    localStorage.setItem('ab.scroll.' + S.tab, String($('main').scrollTop));
+  }
   S.tab = name;
+  if (!opts.silent) {
+    history.replaceState(null, '', '#' + name);
+    localStorage.setItem('ab.tab', name);
+  }
   document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
   $('page-' + name).classList.add('active');
   document.querySelectorAll('.nav-item').forEach((b) =>
     b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tabbar button').forEach((b) =>
     b.classList.toggle('on', b.dataset.tab === name));
-  $('main').scrollTop = 0;
+  $('main').scrollTop = opts.keepScroll ? ($('main').scrollTop || 0) : 0;
   if (name === 'script') loadChapterOptions();
   if (name === 'works') { loadWorks(); loadExportPlan(); }
+  setTimeout(applyPendingScroll, 600);
   if (name === 'synth') renderQueue();
   updateMini();
 }
@@ -148,12 +163,19 @@ async function boot() {
   S.chapters = data.chapters || [];
   S.selected = new Set(S.chapters.map((c) => c.file));
   applySettings(data.settings, data.llm);
+  $('lanBanner').classList.toggle('on', !!data.lan);
+  document.body.classList.toggle('has-lan', !!data.lan);
   renderBooks();
   renderBook();
   renderCast();
   renderWorks(data.outputs);
   renderChapters(data.chapters);
-  setTab('shelf');
+
+  const want = (location.hash || '').replace('#', '') || localStorage.getItem('ab.tab') || 'shelf';
+  const tab = TABS.some((t) => t[0] === want) ? want : 'shelf';
+  setTab(tab, { silent: true });
+  S.pendingScroll = +(localStorage.getItem('ab.scroll.' + tab) || 0);
+  setTimeout(applyPendingScroll, 1200);        // 等首屏数据渲染完再滚
   if (data.cast && data.cast.length) { /* 已有角色 */ }
   startPolling();
 }
@@ -249,6 +271,8 @@ async function reloadData() {
   S.chapters = data.chapters || [];
   S.selected = new Set(S.chapters.map((c) => c.file));
   applySettings(data.settings, data.llm);
+  $('lanBanner').classList.toggle('on', !!data.lan);
+  document.body.classList.toggle('has-lan', !!data.lan);
   renderBooks();
   renderBook();
   renderCast();
@@ -536,7 +560,14 @@ function openCastEditor(name) {
       S.boot.library = res.library; renderCast(); toast(`已把「${row[0]}」存入角色库`);
     };
     body.querySelector('[data-del]').onclick = () => {
-      S.cast.splice(idx, 1); renderCast(); closeSheet(); toast(`已删除「${name}」`);
+      const removed = S.cast.splice(idx, 1)[0];
+      renderCast(); closeSheet();
+      toast(`已删除「${name}」`, async () => {
+        S.cast.splice(idx, 0, removed);
+        renderCast();
+        await api('/api/cast', { method: 'PUT', body: { rows: S.cast } });
+        toast('已撤销');
+      });
     };
   }, async () => {
     S.cast[idx] = row;
@@ -594,14 +625,19 @@ function loadChapterOptions() {
   const cur = sel.value;
   sel.innerHTML = list.map((c) =>
     `<option value="${esc(c.file)}">${esc(c.title)}${c.translated ? '（已转译）' : ''}</option>`).join('');
+  const remembered = localStorage.getItem('ab.chapter.' + (S.boot?.book?.id || ''));
   if (cur && list.some((c) => c.file === cur)) sel.value = cur;
+  else if (remembered && list.some((c) => c.file === remembered)) sel.value = remembered;
   else {
     const rich = list.find((c) => (c.chars || 0) > 200) || list[0];
     sel.value = rich.file;
   }
   loadScript();
 }
-$('chapterSelect').onchange = () => loadScript();
+$('chapterSelect').onchange = () => {
+  localStorage.setItem('ab.chapter.' + (S.boot?.book?.id || ''), $('chapterSelect').value);
+  loadScript();
+};
 
 async function loadScript() {
   const chapter = $('chapterSelect').value;
@@ -689,6 +725,7 @@ function renderScript() {
   $('bubbleList').querySelectorAll('[data-idx]').forEach((b) => {
     b.onclick = () => openBubbleActions(+b.dataset.idx);
   });
+  setTimeout(applyPendingScroll, 120);
 }
 
 $('segFilter').onclick = (e) => {
@@ -755,9 +792,14 @@ function pickRole(idx) {
     host.appendChild(box);
     box.querySelectorAll('[data-n]').forEach((b) => b.onclick = async () => {
       try {
-        await api('/api/script/edit', { method: 'POST',
+        const r = await api('/api/script/edit', { method: 'POST',
           body: { chapter: $('chapterSelect').value, index: idx, action: 'role', value: b.dataset.n } });
-        closeSheet(); await loadScript(); toast(`第 ${idx} 句改为「${b.dataset.n}」`);
+        closeSheet(); await loadScript();
+        toast(`第 ${idx} 句改为「${b.dataset.n}」`, async () => {
+          await api('/api/script/edit', { method: 'POST', body: {
+            chapter: $('chapterSelect').value, index: idx, action: 'role', value: r.old_role } });
+          await loadScript(); toast('已撤销');
+        });
       } catch (e) { toast(e.message); }
     });
     box.querySelector('[data-cancel]').onclick = closeSheet;
@@ -811,8 +853,9 @@ $('btnAudit').onclick = async () => {
         closeSheet();
         await loadScript();
         toast(`已跳过 ${res.removed} 行`, async () => {
-          // 撤销：按原顺序插回（简化：整章重新载入会丢，这里只提示）
-          toast('撤销请用编辑器的版本历史（暂未实现）');
+          await api('/api/script/restore', { method: 'POST',
+            body: { chapter, items: res.restore } });
+          await loadScript(); toast('已撤销');
         });
       };
       box.querySelectorAll('[data-skip]').forEach((b) =>
@@ -1410,6 +1453,13 @@ function notifyDone(text) {
 }
 
 /* ── 启动 ───────────────────────────────────────────── */
+$('main').addEventListener('scroll', () => {
+  clearTimeout(S._scrollT);
+  S._scrollT = setTimeout(() => {
+    if (S.tab) localStorage.setItem('ab.scroll.' + S.tab, String($('main').scrollTop));
+  }, 400);
+}, { passive: true });
+
 playerInit();
 registerSW();
 bindShortcuts();
