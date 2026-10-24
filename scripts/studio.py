@@ -44,6 +44,7 @@ OUTPUT_DIR = os.path.join(ROOT, "output")
 CONFIG_DIR = os.path.join(ROOT, "config")
 VOICE_MAP_PATH = os.path.join(CONFIG_DIR, "voice_map.json")
 LIBRARY_PATH = os.path.join(CONFIG_DIR, "character_library.json")
+PRONOUNCE_PATH = os.path.join(CONFIG_DIR, "pronounce.json")
 
 # 只认 split.py 生成的 3 位序号文件，避免误删用户自己放进 samples/ 的东西
 CHAPTER_FILE_RE = re.compile(r"^\d{3}_.*\.txt$")
@@ -505,14 +506,23 @@ def script_preview(novel_path: str, voice_map: dict, start: int = 0,
             r["lines"] += 1
             r["chars"] += chars
 
+        flags = []
+        if not skip:
+            if role != "旁白" and role not in voice_map:
+                flags.append("未配音")
+            if chars > 120:
+                flags.append("过长")
+            if chars and chars < 3:
+                flags.append("过短")
         if len(rows) < max_rows:
-            rows.append([idx, kind, role, text[:80], chars, status])
+            rows.append([idx, kind, role, text[:80], chars, status, "、".join(flags)])
 
     roles = [
         {"role": k, "lines": v["lines"], "chars": v["chars"],
          "percent": round(v["lines"] * 100 / max(stats["read"], 1))}
         for k, v in sorted(per_role.items(), key=lambda kv: -kv[1]["lines"])
     ]
+    stats["warn"] = sum(1 for r in rows if r[6])
     return {"rows": rows, "stats": stats, "roles": roles, "total": len(trace)}
 
 
@@ -531,6 +541,43 @@ def load_voice_map() -> dict | None:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+# ─────────────────────────────────────────────────────
+# 发音词典（多音字 / 专名，用同音字替换）
+# ─────────────────────────────────────────────────────
+def load_pronounce() -> dict:
+    """{原文: 替换为}；文件不存在返回空表"""
+    if not os.path.exists(PRONOUNCE_PATH):
+        return {}
+    try:
+        with open(PRONOUNCE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_pronounce(items: dict) -> str:
+    ensure_dirs()
+    clean = {str(k).strip(): str(v).strip()
+             for k, v in (items or {}).items()
+             if str(k).strip() and str(v).strip()}
+    with open(PRONOUNCE_PATH, "w", encoding="utf-8") as f:
+        json.dump(clean, f, ensure_ascii=False, indent=2)
+    apply_pronounce(clean)
+    return PRONOUNCE_PATH
+
+
+def apply_pronounce(items: dict | None = None) -> dict:
+    """把词典推给生成器（合成时逐句替换）"""
+    table = load_pronounce() if items is None else items
+    gen._PRONOUNCE = dict(table)
+    return gen._PRONOUNCE
+
+
+def pronounce_rows() -> list[list]:
+    return [[k, v] for k, v in sorted(load_pronounce().items(), key=lambda kv: -len(kv[0]))]
 
 
 # ─────────────────────────────────────────────────────
@@ -1028,7 +1075,7 @@ def preview_voice(text: str, voice: str, rate: str = "+0%", pitch: str = "+0Hz")
     tmpdir = tempfile.mkdtemp(prefix="preview_")
     out = os.path.join(tmpdir, "preview.mp3")
     ok = asyncio.run(gen._synthesize_line(
-        text, resolve_voice(voice), as_str(rate, "+0%") or "+0%",
+        gen.apply_pronounce(text), resolve_voice(voice), as_str(rate, "+0%") or "+0%",
         as_str(pitch, "+0Hz") or "+0Hz", out,
     ))
     if not ok:

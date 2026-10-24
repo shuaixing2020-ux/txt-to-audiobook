@@ -57,6 +57,18 @@ _INTERVAL = float(os.environ.get("AUDIOBOOK_INTERVAL", "1.2"))
 _WORKERS = int(os.environ.get("AUDIOBOOK_WORKERS", "4") or 4)
 # 引擎：edge = 微软在线（音质好，需联网）；say = macOS 系统语音（离线可用）
 _ENGINE = os.environ.get("AUDIOBOOK_ENGINE", "edge").lower()
+# 发音词典：{原文: 同音替换}，合成前逐句替换（由 studio.save_pronounce 注入）
+_PRONOUNCE: dict[str, str] = {}
+
+
+def apply_pronounce(text: str) -> str:
+    """按词典替换多音字 / 专名；长词优先，避免「重庆」被「重」抢先替换"""
+    if not _PRONOUNCE or not text:
+        return text
+    for src in sorted(_PRONOUNCE, key=len, reverse=True):
+        if src in text:
+            text = text.replace(src, _PRONOUNCE[src])
+    return text
 
 
 # ─────────────────────────────────────────────────────
@@ -241,7 +253,8 @@ async def synthesize_script(
     tasks: list[dict] = []
     for i, line in enumerate(script):
         cfg = voice_map.get(line["role"], narrator_cfg)
-        for ci, chunk in enumerate(_clean_text(line["text"])):
+        # 发音词典在这一层生效：字幕仍显示原文，只有 TTS 听到的是替换后的字
+        for ci, chunk in enumerate(_clean_text(apply_pronounce(line["text"]))):
             tasks.append({
                 "line": i, "chunk": ci, "role": line["role"], "text": chunk,
                 "voice": cfg["voice"], "rate": cfg["rate"], "pitch": cfg["pitch"],

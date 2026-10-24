@@ -390,6 +390,18 @@ def line_audio(req: LineAudioReq):
             "voice": voice, "ms": mp3_duration_ms(audio)}
 
 
+@app.get("/api/pronounce")
+def get_pronounce():
+    return {"items": studio.pronounce_rows()}
+
+
+@app.post("/api/pronounce")
+def set_pronounce(payload: dict):
+    items = payload.get("items") or {}
+    studio.save_pronounce(items)
+    return {"items": studio.pronounce_rows()}
+
+
 @app.get("/api/diagnose")
 def diagnose(deep: bool = False):
     from scripts import doctor
@@ -522,6 +534,7 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", "7860"))
     studio.ensure_dirs()
+    studio.apply_pronounce()
     print(f"\n  有声书工坊 · iOS 界面")
     print(f"  http://127.0.0.1:{port}\n")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

@@ -149,6 +149,39 @@ def test_translate_rules_produces_canonical():
     assert {b["role"] for b in back} >= {"旁白", "陈默"}, back
 
 
+def test_pronounce_longest_first():
+    """发音词典要长词优先：重庆 → 崇庆，不能被「重」抢先替换"""
+    import scripts.audiobook_generator as gen
+
+    old = gen._PRONOUNCE
+    try:
+        gen._PRONOUNCE = {"重庆": "崇庆", "重": "虫"}
+        assert gen.apply_pronounce("重庆很重") == "崇庆很虫"
+        gen._PRONOUNCE = {}
+        assert gen.apply_pronounce("重庆很重") == "重庆很重"
+    finally:
+        gen._PRONOUNCE = old
+
+
+def test_script_preview_flags():
+    """剧本预览要标出异常：未配音角色 / 过长 / 过短"""
+    original = _isolate()
+    try:
+        with open(os.path.join(studio.SAMPLES_DIR, "001_t.txt"), "w", encoding="utf-8") as f:
+            # 转译稿格式要求至少 3 行才认，这里造够行数
+            f.write("旁白｜短。\n陌生人｜这句没在配音表里。\n旁白｜这一句是正常长度的叙述文本。\n")
+        vm = {"旁白": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+0%", "pitch": "+0Hz",
+                       "gender": "female", "role": "narrator", "frequency": 0}}
+        p = studio.script_preview(os.path.join(studio.SAMPLES_DIR, "001_t.txt"), vm)
+        flags = {r[2]: r[6] for r in p["rows"]}
+        assert "未配音" in flags.get("陌生人", ""), flags
+        narr = [r[6] for r in p["rows"] if r[2] == "旁白"]
+        assert any("过短" in f for f in narr), narr
+        assert p["stats"]["warn"] >= 2, p["stats"]
+    finally:
+        _restore(original)
+
+
 def test_translate_chunks_and_similarity():
     from scripts import translate
 
@@ -379,6 +412,8 @@ if __name__ == "__main__":
         test_restyle_by_age_emotion,
         test_move_role_reorders_rows,
         test_translate_rules_produces_canonical,
+        test_pronounce_longest_first,
+        test_script_preview_flags,
         test_translate_chunks_and_similarity,
         test_translate_job_writes_file,
         test_job_stop_leaves_no_partial_file,

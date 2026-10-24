@@ -607,7 +607,8 @@ def _script_panel_html(preview: dict, only_role: str = "全部", only_skip: bool
 
     lines = ""
     shown = 0
-    for idx, kind, role, text, chars, status in preview["rows"]:
+    for row in preview["rows"]:
+        idx, kind, role, text, chars, status = row[:6]
         if only_role != "全部" and role != only_role:
             continue
         if only_skip and not str(status).startswith("跳过"):

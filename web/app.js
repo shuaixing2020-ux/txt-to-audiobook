@@ -496,7 +496,8 @@ function renderScript() {
   const s = S.script;
   if (!s) return;
   const st = s.stats || {};
-  $('scriptStats').textContent = `${st.total || 0} 句 · 朗读 ${st.read || 0} · 跳过 ${st.skipped || 0}`;
+  $('scriptStats').textContent = `${st.total || 0} 句 · 朗读 ${st.read || 0} · 跳过 ${st.skipped || 0}`
+    + (st.warn ? ` · 异常 ${st.warn}` : '');
   $('scriptSub').textContent = s.source === 'translated'
     ? '正在看转译稿（角色｜台词），合成会用它' : '还在看原文，建议先转译';
 
@@ -504,6 +505,7 @@ function renderScript() {
   const rows = (s.rows || []).filter((r) => {
     if (S.filter === 'dialog') return r[1] === '对白';
     if (S.filter === 'skip') return String(r[5]).startsWith('跳过');
+    if (S.filter === 'warn') return !!r[6];
     return true;
   });
 
@@ -552,6 +554,7 @@ function renderScript() {
         ${isNarr ? '' : `<span class="who">${esc(role)}</span>`}
         ${esc(text)}
         ${skipped ? `<span class="reason">${esc(String(status).replace('跳过（', '').replace('）', ''))}</span>` : ''}
+        ${r[6] ? `<span class="reason">${esc(r[6])}</span>` : ''}
       </div></div>`;
   }).join('');
 
@@ -894,6 +897,15 @@ function openSettings() {
         </div>
       </div>
 
+      <div class="section-title">发音词典</div>
+      <div class="card">
+        <div class="hint">多音字 / 专名用同音字替换，全书合成时生效（字幕仍显示原文）。例：重庆 → 崇庆。</div>
+        <div id="pronList"></div>
+        <div class="field"><label>原文</label><input type="text" data-pron-from placeholder="重庆"></div>
+        <div class="field"><label>替换为</label><input type="text" data-pron-to placeholder="崇庆"></div>
+        <div style="padding:10px 16px 14px"><button class="btn block" data-pron-add>添加</button></div>
+      </div>
+
       <div class="section-title">诊断</div>
       <div class="card">
         <div class="row"><div class="grow"><div class="title">环境自检</div>
@@ -934,6 +946,34 @@ function openSettings() {
       val('[data-llm-note]').textContent = r.ready ? `已保存，${r.note}` : `已保存，但 ${r.note}`;
       toast('大模型设置已保存');
     };
+    // 发音词典
+    let pron = {};
+    const renderPron = () => {
+      const rows = Object.entries(pron);
+      body.querySelector('#pronList').innerHTML = rows.length ? rows.map(([k, v]) => `
+        <div class="row"><div class="grow"><div class="title">${esc(k)} → ${esc(v)}</div></div>
+        <button class="btn small danger" data-pron-del="${esc(k)}">删除</button></div>`).join('')
+        : `<div class="hint">还没有条目</div>`;
+      body.querySelectorAll('[data-pron-del]').forEach((b) => b.onclick = async () => {
+        delete pron[b.dataset.pronDel];
+        await api('/api/pronounce', { method: 'POST', body: { items: pron } });
+        renderPron(); toast('已删除');
+      });
+    };
+    api('/api/pronounce').then((r) => {
+      pron = Object.fromEntries(r.items.map(([k, v]) => [k, v]));
+      renderPron();
+    });
+    val('[data-pron-add]').onclick = async () => {
+      const from = val('[data-pron-from]').value.trim();
+      const to = val('[data-pron-to]').value.trim();
+      if (!from || !to) return toast('原文和替换都要填');
+      pron[from] = to;
+      await api('/api/pronounce', { method: 'POST', body: { items: pron } });
+      val('[data-pron-from]').value = ''; val('[data-pron-to]').value = '';
+      renderPron(); toast(`已添加「${from} → ${to}」`);
+    };
+
     val('[data-diag]').onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = '检测中…';
       const r = await api('/api/diagnose');
