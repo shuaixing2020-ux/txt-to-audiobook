@@ -657,8 +657,20 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("PORT", "7860"))
+    host = os.environ.get("HOST", "127.0.0.1")
     studio.ensure_dirs()
     studio.apply_pronounce()
-    print(f"\n  有声书工坊 · iOS 界面")
-    print(f"  http://127.0.0.1:{port}\n")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+    print("\n  有声书工坊 · iOS 界面")
+    if host in ("0.0.0.0", "::"):
+        import socket
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            ip = "本机IP"
+        print(f"  本机：http://127.0.0.1:{port}")
+        print(f"  手机：http://{ip}:{port}  （同一 Wi-Fi 下）")
+        print("  ⚠️ 已监听所有网卡且没有登录，请只在可信网络里使用\n")
+    else:
+        print(f"  http://{host}:{port}\n")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
